@@ -1,7 +1,7 @@
 {
   "name": "@codehz/preeval",
   "version": "0.2.2",
-  "description": "Build-time pre-evaluation of // @preeval marked top-level consts for library publish builds",
+  "description": "Publish-build pre-evaluation of imported ESM calls with optional runtime materialization",
   "type": "module",
   "license": "MIT",
   "keywords": [

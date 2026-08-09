@@ -3,14 +3,14 @@ import {
   type TransformResult,
   type UnpluginFactory,
 } from 'unplugin'
-import type { FailurePolicy, Options } from './types'
+import type { FailurePolicy, ImportedFunctionRef, Options } from './types'
 import { transformPreeval } from './core/transform'
 
 export type {
   FailurePolicy,
-  ImportedFunctionRule,
-  ImportedFunctionSubstitute,
+  ImportedFunctionRef,
   Options,
+  PreevalRule,
 } from './types'
 
 /**
@@ -48,6 +48,15 @@ function assertNonEmptyString(value: unknown, field: string): asserts value is s
   }
 }
 
+function assertFunctionRef(value: unknown, field: string): asserts value is ImportedFunctionRef {
+  if (value == null || typeof value !== 'object') {
+    throw new TypeError(`[preeval] ${field} must be an object`)
+  }
+  const ref = value as Record<string, unknown>
+  assertNonEmptyString(ref.from, `${field}.from`)
+  assertNonEmptyString(ref.import, `${field}.import`)
+}
+
 function validateOptions(options: Options): void {
   const rawOptions = options as unknown as Record<string, unknown>
   if ('strict' in rawOptions) {
@@ -55,36 +64,43 @@ function validateOptions(options: Options): void {
       '[preeval] strict was removed; use onFailure: "error" instead',
     )
   }
+  if ('imports' in rawOptions) {
+    throw new TypeError('[preeval] imports was removed; use rules instead')
+  }
   if (options.onFailure !== undefined) {
     assertFailurePolicy(options.onFailure, 'onFailure')
   }
-  if (options.imports === undefined) return
-  if (!Array.isArray(options.imports)) {
-    throw new TypeError('[preeval] imports must be an array')
+  if (options.rules === undefined) return
+  if (!Array.isArray(options.rules)) {
+    throw new TypeError('[preeval] rules must be an array')
   }
 
   const seen = new Set<string>()
-  for (const [index, rule] of options.imports.entries()) {
+  for (const [index, rule] of options.rules.entries()) {
     if (rule == null || typeof rule !== 'object') {
-      throw new TypeError(`[preeval] imports[${index}] must be an object`)
+      throw new TypeError(`[preeval] rules[${index}] must be an object`)
     }
-    assertNonEmptyString(rule.from, `imports[${index}].from`)
-    assertNonEmptyString(rule.import, `imports[${index}].import`)
-    if (rule.onFailure !== undefined) {
-      assertFailurePolicy(rule.onFailure, `imports[${index}].onFailure`)
+    const rawRule = rule as unknown as Record<string, unknown>
+    if ('substitute' in rawRule) {
+      throw new TypeError(
+        `[preeval] rules[${index}].substitute was removed; use evaluate and materialize`,
+      )
     }
-    if (rule.substitute !== undefined) {
-      if (rule.substitute == null || typeof rule.substitute !== 'object') {
-        throw new TypeError(`[preeval] imports[${index}].substitute must be an object`)
-      }
-      assertNonEmptyString(rule.substitute.from, `imports[${index}].substitute.from`)
-      assertNonEmptyString(rule.substitute.import, `imports[${index}].substitute.import`)
+    assertFunctionRef(rawRule.match, `rules[${index}].match`)
+    if (rawRule.evaluate !== undefined) {
+      assertFunctionRef(rawRule.evaluate, `rules[${index}].evaluate`)
+    }
+    if (rawRule.materialize !== undefined) {
+      assertFunctionRef(rawRule.materialize, `rules[${index}].materialize`)
+    }
+    if (rawRule.onFailure !== undefined) {
+      assertFailurePolicy(rawRule.onFailure, `rules[${index}].onFailure`)
     }
 
-    const key = `${rule.from}\0${rule.import}`
+    const key = `${rawRule.match.from}\0${rawRule.match.import}`
     if (seen.has(key)) {
       throw new TypeError(
-        `[preeval] duplicate imported function rule for ${rule.from}#${rule.import}`,
+        `[preeval] duplicate imported function rule for ${rawRule.match.from}#${rawRule.match.import}`,
       )
     }
     seen.add(key)
@@ -102,7 +118,7 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (options = 
           include: options.include ?? DEFAULT_INCLUDE,
           exclude: options.exclude ?? DEFAULT_EXCLUDE,
         },
-        ...(options.imports?.length ? {} : { code: { include: MARKER } }),
+        ...(options.rules?.length ? {} : { code: { include: MARKER } }),
       },
       async handler(code, id): Promise<TransformResult> {
         const result = await transformPreeval(code, id, options, this)

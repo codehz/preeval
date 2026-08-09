@@ -9,7 +9,7 @@ import type {
   Statement,
   VariableDeclaration,
 } from '@babel/types'
-import type { ImportedFunctionRule } from '../types'
+import type { PreevalRule } from '../types'
 
 // CJS interop: Bun/Node may surface either the function or `{ default: fn }`.
 const generate = (generateMod as unknown as { default?: typeof generateMod }).default ?? generateMod
@@ -31,6 +31,8 @@ export interface EvaluationPlan {
   /** Minimal ESM source that evaluates the union lexical closure. */
   code: string
   targets: PreevalTarget[]
+  /** Marked targets excluded because their closure crosses runtime materialization. */
+  blockedTargets?: MarkedBindingTarget[]
 }
 
 /** Lightweight marked-binding metadata, before dependency validation. */
@@ -40,13 +42,25 @@ export interface MarkedBindingTarget {
   initEnd: number
 }
 
+export interface SourceRange {
+  start: number
+  end: number
+}
+
+export class RuntimeBoundaryBlocked extends Error {
+  constructor() {
+    super('preeval: target depends on a runtime materializer boundary')
+    this.name = 'RuntimeBoundaryBlocked'
+  }
+}
+
 /** One direct call or tagged template matched to a configured static ESM import. */
 export interface AutomaticCallTarget {
   start: number
   end: number
   line: number
   column: number
-  rule: ImportedFunctionRule
+  rule: PreevalRule
   bindingName: string
   containingMarkedName?: string
 }
@@ -200,6 +214,19 @@ export function findMarkedPreevalTargets(
   }))
 }
 
+/** Conservative identifier set used to allocate collision-free synthetic imports. */
+export function collectUsedIdentifierNames(code: string, filename?: string): Set<string> {
+  const file = parseModule(code, filename)
+  const names = new Set<string>()
+  if (file == null) return names
+  traverse(file, {
+    Identifier(path) {
+      names.add(path.node.name)
+    },
+  })
+  return names
+}
+
 /** Pure type-system nodes: traverse should skip (no runtime free refs). */
 function isPureTypeNode(node: t.Node): boolean {
   switch (node.type) {
@@ -296,7 +323,7 @@ function isTypeOnlyImportSpec(
 }
 
 interface MatchedImportedCall {
-  rule: ImportedFunctionRule
+  rule: PreevalRule
   localName: string
 }
 
@@ -320,7 +347,7 @@ function staticMemberName(member: t.MemberExpression): string | null {
 function matchImportedCallee(
   callee: t.Node,
   scope: Scope,
-  rules: readonly ImportedFunctionRule[],
+  rules: readonly PreevalRule[],
 ): MatchedImportedCall | null {
   let localName: string
   let exportName: string
@@ -359,7 +386,7 @@ function matchImportedCallee(
   }
 
   const rule = rules.find(
-    (candidate) => candidate.from === decl.source.value && candidate.import === exportName,
+    (candidate) => candidate.match.from === decl.source.value && candidate.match.import === exportName,
   )
   return rule ? { rule, localName } : null
 }
@@ -389,7 +416,7 @@ function pushAutomaticTarget(
 
 export function findAutomaticPreevalCalls(
   code: string,
-  rules: readonly ImportedFunctionRule[],
+  rules: readonly PreevalRule[],
   filename?: string,
 ): AutomaticCallTarget[] {
   if (rules.length === 0) return []
@@ -677,6 +704,27 @@ function buildNameClosure(
   }
 
   return closure
+}
+
+function nodeTouchesRanges(node: t.Node, ranges: readonly SourceRange[]): boolean {
+  const start = node.start
+  const end = node.end
+  if (typeof start !== 'number' || typeof end !== 'number') return false
+  return ranges.some((range) => start < range.end && range.start < end)
+}
+
+function closureTouchesRanges(
+  roots: readonly NodePath[],
+  closure: ReadonlySet<string>,
+  localDecls: Map<string, LocalDecl>,
+  ranges: readonly SourceRange[],
+): boolean {
+  if (roots.some((root) => nodeTouchesRanges(root.node, ranges))) return true
+  for (const name of closure) {
+    const decl = localDecls.get(name)
+    if (decl && nodeTouchesRanges(decl.path.node, ranges)) return true
+  }
+  return false
 }
 
 /** Union of per-target closures for targets whose statement starts after `stmtStart`. */
@@ -1112,31 +1160,39 @@ function allocateSyntheticName(base: string, used: Set<string>): string {
   return candidate
 }
 
+function sameFunctionRef(
+  left: { from: string; import: string },
+  right: { from: string; import: string },
+): boolean {
+  return left.from === right.from && left.import === right.import
+}
+
 function buildAutomaticExtractedCode(
   body: Statement[],
   closure: Set<string>,
   expression: t.CallExpression | t.TaggedTemplateExpression,
-  rule: ImportedFunctionRule,
+  rule: PreevalRule,
   localDecls: Map<string, LocalDecl>,
 ): { code: string; name: string; evalExportName: string } {
   const used = new Set(localDecls.keys())
   const resultName = allocateSyntheticName('__preeval_call', used)
   const evalExportName = allocateSyntheticName('__preeval_0', used)
   const out: Statement[] = []
+  const evaluator = rule.evaluate ?? rule.match
 
-  if (rule.substitute) {
-    const substituteName = allocateSyntheticName('__preeval_substitute', used)
-    const specifier = rule.substitute.import === 'default'
-      ? t.importDefaultSpecifier(t.identifier(substituteName))
+  if (!sameFunctionRef(evaluator, rule.match)) {
+    const evaluatorName = allocateSyntheticName('__preeval_evaluate', used)
+    const specifier = evaluator.import === 'default'
+      ? t.importDefaultSpecifier(t.identifier(evaluatorName))
       : t.importSpecifier(
-          t.identifier(substituteName),
-          t.isValidIdentifier(rule.substitute.import)
-            ? t.identifier(rule.substitute.import)
-            : t.stringLiteral(rule.substitute.import),
+          t.identifier(evaluatorName),
+          t.isValidIdentifier(evaluator.import)
+            ? t.identifier(evaluator.import)
+            : t.stringLiteral(evaluator.import),
         )
-    out.push(t.importDeclaration([specifier], t.stringLiteral(rule.substitute.from)))
-    if (expression.type === 'CallExpression') expression.callee = t.identifier(substituteName)
-    else expression.tag = t.identifier(substituteName)
+    out.push(t.importDeclaration([specifier], t.stringLiteral(evaluator.from)))
+    if (expression.type === 'CallExpression') expression.callee = t.identifier(evaluatorName)
+    else expression.tag = t.identifier(evaluatorName)
   }
 
   for (const stmt of body) {
@@ -1173,8 +1229,9 @@ function automaticExpressionPayloadPaths(
 export function analyzeAutomaticPreevalCall(
   code: string,
   targetStart: number,
-  rule: ImportedFunctionRule,
+  rule: PreevalRule,
   filename?: string,
+  options?: { runtimeBoundaries?: readonly SourceRange[] },
 ): EvaluationPlan {
   const file = parseModule(code, filename)
   if (file == null) throw new Error('preeval: failed to parse module for automatic call')
@@ -1216,9 +1273,20 @@ export function analyzeAutomaticPreevalCall(
       roots.add(name)
     }
   }
-  if (!rule.substitute) roots.add(callMatch.localName)
+  if (sameFunctionRef(rule.evaluate ?? rule.match, rule.match)) roots.add(callMatch.localName)
 
   const closure = buildNameClosure(roots, programScope, localDecls)
+  if (
+    options?.runtimeBoundaries?.length
+    && closureTouchesRanges(
+      automaticExpressionPayloadPaths(expressionPath),
+      closure,
+      localDecls,
+      options.runtimeBoundaries,
+    )
+  ) {
+    throw new RuntimeBoundaryBlocked()
+  }
   const stmt = containingTopLevelStatement(expressionPath)
   const syntheticTarget = '__preeval_automatic_target'
   assertNoInterferingStatements(
@@ -1259,22 +1327,24 @@ export function analyzeAutomaticPreevalCall(
 export function analyzePreevalModule(
   code: string,
   filename?: string,
-  options?: { skipMarkedNames?: ReadonlySet<string> },
+  options?: {
+    skipMarkedNames?: ReadonlySet<string>
+    runtimeBoundaries?: readonly SourceRange[]
+  },
 ): EvaluationPlan | null {
   const file = parseModule(code, filename)
   if (file == null) return null
 
-  const rawTargets = collectMarkedTargets(code, file).filter(
+  const candidateTargets = collectMarkedTargets(code, file).filter(
     (target) => !options?.skipMarkedNames?.has(target.name),
   )
-  if (rawTargets.length === 0) return null
+  if (candidateTargets.length === 0) return null
 
   const pPath = resolveProgramPath(file)
   const programScope = pPath.scope
   const localDecls = indexLocalDecls(pPath)
 
-  // Validate each target binding itself.
-  for (const target of rawTargets) {
+  for (const target of candidateTargets) {
     const decl = localDecls.get(target.name)
     if (decl == null) {
       throw new Error(`preeval: marked const "${target.name}" has no top-level binding`)
@@ -1287,18 +1357,32 @@ export function analyzePreevalModule(
     }
   }
 
-  const closure = buildNameClosure(
-    rawTargets.map((t) => t.name),
-    programScope,
-    localDecls,
-  )
-
   const perTargetClosures = new Map<string, Set<string>>()
+  const blockedTargets: MarkedBindingTarget[] = []
+  for (const target of candidateTargets) {
+    const targetClosure = buildNameClosure([target.name], programScope, localDecls)
+    perTargetClosures.set(target.name, targetClosure)
+    if (
+      options?.runtimeBoundaries?.length
+      && closureTouchesRanges([], targetClosure, localDecls, options.runtimeBoundaries)
+    ) {
+      blockedTargets.push({
+        name: target.name,
+        initStart: target.initStart,
+        initEnd: target.initEnd,
+      })
+    }
+  }
+
+  const blockedNames = new Set(blockedTargets.map((target) => target.name))
+  const rawTargets = candidateTargets.filter((target) => !blockedNames.has(target.name))
+  if (rawTargets.length === 0) {
+    return { code: '', targets: [], blockedTargets }
+  }
+
+  const closure = new Set<string>()
   for (const target of rawTargets) {
-    perTargetClosures.set(
-      target.name,
-      buildNameClosure([target.name], programScope, localDecls),
-    )
+    for (const name of perTargetClosures.get(target.name) ?? []) closure.add(name)
   }
 
   assertNoInterferingStatements(
@@ -1309,20 +1393,23 @@ export function analyzePreevalModule(
     perTargetClosures,
   )
 
-
   const evalNames = allocateEvalExportNames(
-    rawTargets.map((t) => t.name),
+    rawTargets.map((target) => target.name),
     localDecls,
   )
-  const targets: PreevalTarget[] = rawTargets.map((t, i) => ({
-    name: t.name,
-    initStart: t.initStart,
-    initEnd: t.initEnd,
-    evalExportName: evalNames[i]!,
+  const targets: PreevalTarget[] = rawTargets.map((target, index) => ({
+    name: target.name,
+    initStart: target.initStart,
+    initEnd: target.initEnd,
+    evalExportName: evalNames[index]!,
   }))
 
   const extracted = buildExtractedCode(file.program.body, closure, targets)
-  return { code: extracted, targets }
+  return {
+    code: extracted,
+    targets,
+    ...(blockedTargets.length > 0 ? { blockedTargets } : {}),
+  }
 }
 
 export interface SourceEdit {

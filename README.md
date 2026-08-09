@@ -1,6 +1,6 @@
 # @codehz/preeval
 
-Build-time pre-evaluation of marked constants and selected statically imported ESM function calls. The plugin evaluates extractable expressions during an author-side publish build and replaces them with JSON-superset literals, so consumers receive plain data without this plugin or the removed function imports.
+Build-time pre-evaluation of marked constants and selected statically imported ESM function calls. The plugin serializes static results into the author-side publish build and can pass those payloads through explicit runtime materializers for values such as `Map`, class instances, proxies, or registration handles.
 
 ## Install
 
@@ -44,20 +44,21 @@ Rules:
 
 ## Configure imported functions
 
-Use `imports` to select functions by the exact source import specifier and ESM export name:
+Use `rules` to define an explicit match → evaluate → optional materialize pipeline:
 
 ```ts
 import preeval from '@codehz/preeval/vite'
 
 export default defineConfig({
   plugins: [preeval({
-    imports: [
-      { from: 'message-compiler', import: 'compile' },
-      { from: 'default-package', import: 'default' },
+    rules: [
       {
-        from: 'runtime-package',
-        import: 'compile',
-        substitute: { from: 'pure-package', import: 'compilePure' },
+        match: { from: 'message-compiler', import: 'compile' },
+      },
+      {
+        match: { from: 'runtime-package', import: 'compile' },
+        evaluate: { from: 'pure-package', import: 'compilePure' },
+        materialize: { from: 'runtime-package', import: 'materialize' },
         onFailure: 'warn',
       },
     ],
@@ -65,11 +66,15 @@ export default defineConfig({
 })
 ```
 
-Matching is binding-aware and supports named imports, default imports, aliases declared in the import, and static namespace properties (`ns.fn()` / `ns['fn']()`, and the same forms as tagged-template tags). Direct call expressions and tagged templates (`fn\`...\``, `ns.fn\`...\``) are both macro sites. It does not follow local aliases, re-exports/barrels, CommonJS `require`, dynamic imports, bundler-resolved IDs, or computed property expressions.
+`match` selects the original binding by exact source specifier and ESM export name. Matching is binding-aware and supports named imports, default imports, import aliases, and static namespace properties (`ns.fn()` / `ns['fn']()`, including the same forms as tagged-template tags). Direct calls and tagged templates are macro sites. Local aliases, re-exports/barrels, CommonJS `require`, dynamic imports, bundler-resolved IDs, and computed property expressions are not followed.
 
-Every matched syntactic call or tagged template is a macro site: it runs once during the build even inside a function, loop, or dead control-flow branch. Call arguments and tagged-template interpolations may use literals, ambient globals, imports, stable module-level `const`/function/class/enum dependencies, and ordinary lexical bindings declared within that argument or interpolation (for example, callback parameters and locals). Captures of function or block bindings declared outside the current argument or interpolation are rejected, as are `let`/`var`, reassigned module bindings, `this`, `arguments`, `super`, `new.target`, and `import.meta`.
+`evaluate` selects the build-time callee/tag and defaults to `match`. The evaluator receives the original call arguments or tagged-template inputs. It must return a synchronous JSON-superset payload. The evaluator import exists only in the temporary evaluation module and is never emitted.
 
-`substitute` changes only the callee/tag imported by the temporary evaluation module. Original arguments and template contents are preserved, and emitted runtime code never imports or calls the substitute. Signature, export existence, equivalence, side effects, and purity are intentionally not checked.
+`materialize` is an optional hard runtime boundary. A successful site emits `materialize(<serialized payload>)`; the materializer receives exactly one argument, never the original arguments or template inputs. It is imported only by the final emitted module and is never loaded or executed during pre-evaluation. Its return value may be any runtime value, including `Map`, class instances, proxies, and registration handles.
+
+Every matched syntactic call or tagged template runs once during the build even inside a function, loop, or dead control-flow branch. Payload inputs may use literals, ambient globals, imports, stable module-level `const`/function/class/enum dependencies, and lexical bindings declared within that argument or interpolation. Captures of outer function/block bindings are rejected, as are `let`/`var`, reassigned module bindings, `this`, `arguments`, `super`, `new.target`, and `import.meta`.
+
+If a later automatic target or marked binding depends directly or transitively on a materialized result, pre-evaluation stops at that boundary. The outer target follows its own failure policy instead of importing or executing the materializer at build time.
 
 ## Usage
 
@@ -110,33 +115,33 @@ await Bun.build({
 | Option      | Default              | Description |
 | ----------- | -------------------- | ----------- |
 | `onFailure` | `'warn'`             | Global `ignore \| warn \| error` policy for marked bindings and automatic calls. |
-| `imports`   | `[]`                 | Exact imported-function rules; each rule may override `onFailure` and define a build-time `substitute`. |
+| `rules`     | `[]`                 | Explicit `match`, optional `evaluate`, optional `materialize`, and optional rule-level `onFailure`. |
 | `allowNode` | `false`              | Trust acknowledgment for Node/Bun APIs. Nothing is injected or stripped; there is no sandbox. |
 | `include`   | `/\.[cm]?[jt]sx?$/`  | File-id filter passed to the bundler. |
 | `exclude`   | `/node_modules/`     | File-id filter passed to the bundler. |
 
-When `imports` is empty, the plugin retains the marker-only source filter. When any automatic rule exists, every file passing `include`/`exclude` is inspected because substring filtering could miss aliased or namespace calls.
+When `rules` is empty, the plugin retains the marker-only source filter. When any automatic rule exists, every file passing `include`/`exclude` is inspected because substring filtering could miss aliased or namespace calls.
 
-`strict` was removed. Migrate `strict: true` to `onFailure: 'error'`; the old option is not accepted as a compatibility alias.
+`strict` is not accepted; use `onFailure: 'error'`.
 
 ## Failure policy
 
-- `ignore`: preserve the failed target and emit no diagnostic.
+- `ignore`: preserve the original failed call/tag or marked initializer and emit no diagnostic.
 - `warn` (default): preserve the failed target and emit a source-located warning.
 - `error`: report through the bundler error hook and abort the build.
 
-Rule-level `onFailure` overrides the global policy only for that automatic call. Configuration errors, including malformed policies, missing fields, and duplicate `(from, import)` rules, always throw when the plugin is created.
+Rule-level `onFailure` overrides the global policy only for that automatic target. Configuration errors, including malformed references, missing fields, and duplicate `match` references, always throw when the plugin is created.
 
-Automatic calls run before marked bindings. If an automatic call inside a marked initializer fails under `ignore` or `warn`, that marked binding is skipped so marked evaluation cannot execute the original call and bypass its rule or substitute.
+Automatic targets run before marked bindings. A failed automatic target cannot be executed again through a containing marked initializer. Materialized results similarly block every outer automatic or marked closure that reaches them; unrelated marked targets continue evaluating.
 
 ## Value domain
 
-Only JSON-superset values are accepted — values that round-trip through JSON without information loss:
+Marked values and automatic evaluator payloads must be JSON-superset values that round-trip through JSON without information loss:
 
 - `null`, booleans, strings, finite numbers
 - plain objects (prototype `Object.prototype` or `null`) and arrays, without circular references
 
-Rejected: `undefined`, `NaN`, `±Infinity`, `bigint`, functions, symbols, `Date`, `Map`, `Set`, class instances, and circular structures.
+Rejected evaluator payloads: `undefined`, `NaN`, `±Infinity`, `bigint`, functions, symbols, `Date`, `Map`, `Set`, class instances, and circular structures. A runtime materializer's return value is not serialized and is unrestricted.
 
 ## Requirements / caveats
 
@@ -145,9 +150,9 @@ Rejected: `undefined`, `NaN`, `±Infinity`, `bigint`, functions, symbols, `Date`
 - Calls, constructors, getters, imported-module initialization, and other side effects inside the extracted closure are allowed. Configuring a rule is an explicit trust decision; there is no purity analysis or sandbox.
 - Only synchronous results are supported. Promise/thenable results are failures and are never implicitly awaited.
 - Imported modules load fully. There is no recursive project-graph trimming, persistent build cache, resolved-ID matching, or bundler-resolution emulation.
-- Successful automatic replacements remove their original import specifier only when the binding has no remaining runtime references. Other specifiers remain; namespace imports remain whole while any namespace reference survives. Type-only references do not retain runtime imports.
-- Automatic calls use macro semantics and execute in expression/source order. A successful marked initializer takes precedence over nested automatic edits.
-- Interference checks for marked bindings are per remaining mark. Never-called top-level function/class declarations are ignored unless a pre-target call site can reach them.
+- Successful automatic replacements remove their original import specifier only when the binding has no remaining runtime references. Evaluator imports exist only in temporary modules. Materializer imports are emitted only for successful surviving materialized sites and are deduplicated by exact source/export reference.
+- Automatic calls use macro semantics and execute in expression/source order. Non-materialized successful results may feed later static evaluation; materialized results are runtime boundaries. A successful marked initializer takes precedence over nested non-materialized automatic edits.
+- Interference checks for marked bindings are per remaining mark. A runtime-boundary-blocked mark does not prevent unrelated marks from succeeding. Never-called top-level function/class declarations are ignored unless a pre-target call site can reach them.
 - TypeScript:
   - **Bun**: evaluates TS/TSX natively (including relative `.ts` imports).
   - **Node**: the plugin runs `sucrase` on the extracted entry (optional `sucrase` peer). Relative TypeScript dependencies under Node need a host loader, or plain JS dependencies with explicit extensions.
@@ -161,6 +166,6 @@ Rejected: `undefined`, `NaN`, `±Infinity`, `bigint`, functions, symbols, `Date`
 
 ## How it works
 
-1. **Analyze** — Babel finds configured direct import calls, tagged templates, and marked top-level constants, verifies binding identity, and builds their stable same-file dependency closures.
-2. **Extract + evaluate** — automatic call/tag sites execute first in source order; marked bindings then evaluate against successful intermediate constants. Minimal ESM files are written next to the source, dynamically imported, and removed in `finally`.
-3. **Serialize + replace** — JSON-superset results become literals through one non-overlapping MagicString edit set. Dead matched import bindings are removed without disturbing live specifiers.
+1. **Analyze** — Babel finds configured direct import calls, tagged templates, and marked top-level constants, verifies exact binding identity, and builds stable same-file dependency closures.
+2. **Extract + evaluate** — automatic sites execute children-first with `evaluate ?? match`; marked bindings then evaluate against successful non-runtime intermediate constants. Temporary ESM files are written next to the source, dynamically imported, and removed in `finally`.
+3. **Serialize + emit** — evaluator payloads become literals. Rules with `materialize` emit a hygienic runtime import and `materialize(<literal>)`; other successes emit the literal directly. MagicString applies one non-overlapping final edit set and removes dead matched import bindings.

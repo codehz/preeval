@@ -83,6 +83,25 @@ export const b = 'two'
     expect(plan!.code.match(/export \{/g)?.length ?? 0).toBe(1)
   })
 
+  it('isolates marked targets whose closure crosses a runtime boundary', () => {
+    const code = `const materialized = {"entries":[]}
+// @preeval
+export const blocked = materialized
+// @preeval
+export const independent = 40 + 2
+`
+    const boundary = spanOf(code, '{"entries":[]}')
+
+    const plan = analyzePreevalModule(code, undefined, {
+      runtimeBoundaries: [{ start: boundary.initStart, end: boundary.initEnd }],
+    })
+
+    expect(plan?.targets.map((target) => target.name)).toEqual(['independent'])
+    expect(plan?.blockedTargets?.map((target) => target.name)).toEqual(['blocked'])
+    expect(plan?.code).toContain('const independent = 40 + 2')
+    expect(plan?.code).not.toContain('const blocked')
+  })
+
   it('rejects a marker with trailing text', () => {
     const code = `// @preeval foo
 export const x = 1
@@ -353,11 +372,11 @@ ns.fn()
 ns['fn']()
 `
     const calls = findAutomaticPreevalCalls(code, [
-      { from: 'pkg', import: 'default' },
-      { from: 'pkg', import: 'fn' },
+      { match: { from: 'pkg', import: 'default' } },
+      { match: { from: 'pkg', import: 'fn' } },
     ])
     expect(calls).toHaveLength(5)
-    expect(calls.map((call) => call.rule.import)).toEqual([
+    expect(calls.map((call) => call.rule.match.import)).toEqual([
       'default',
       'fn',
       'fn',
@@ -377,11 +396,11 @@ ns.fn\`d\`
 ns['fn']\`e\`
 `
     const calls = findAutomaticPreevalCalls(code, [
-      { from: 'pkg', import: 'default' },
-      { from: 'pkg', import: 'fn' },
+      { match: { from: 'pkg', import: 'default' } },
+      { match: { from: 'pkg', import: 'fn' } },
     ])
     expect(calls).toHaveLength(5)
-    expect(calls.map((call) => call.rule.import)).toEqual([
+    expect(calls.map((call) => call.rule.match.import)).toEqual([
       'default',
       'fn',
       'fn',
@@ -395,7 +414,7 @@ ns['fn']\`e\`
 const value = \`fn()\`
 fn()
 `
-    const calls = findAutomaticPreevalCalls(code, [{ from: 'pkg', import: 'fn' }])
+    const calls = findAutomaticPreevalCalls(code, [{ match: { from: 'pkg', import: 'fn' } }])
     expect(calls).toHaveLength(1)
   })
 
@@ -407,11 +426,11 @@ const required = require('pkg')
 required.fn()
 import('pkg').then((mod) => mod.fn())
 `
-    expect(findAutomaticPreevalCalls(code, [{ from: 'pkg', import: 'fn' }])).toEqual([])
+    expect(findAutomaticPreevalCalls(code, [{ match: { from: 'pkg', import: 'fn' } }])).toEqual([])
   })
 
   it('matches source specifiers exactly and does not follow barrels', () => {
     const code = `import { fn } from './barrel.js'\nfn()\n`
-    expect(findAutomaticPreevalCalls(code, [{ from: './impl.js', import: 'fn' }])).toEqual([])
+    expect(findAutomaticPreevalCalls(code, [{ match: { from: './impl.js', import: 'fn' } }])).toEqual([])
   })
 })

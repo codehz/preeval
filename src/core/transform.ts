@@ -1,13 +1,16 @@
 import MagicString from 'magic-string'
-import type { FailurePolicy, Options } from '../types'
+import * as t from '@babel/types'
+import type { FailurePolicy, ImportedFunctionRef, Options } from '../types'
 import {
   analyzeAutomaticPreevalCall,
   analyzePreevalModule,
+  collectUsedIdentifierNames,
   findAutomaticPreevalCalls,
   findMarkedPreevalTargets,
   planAutomaticImportCleanup,
   type AutomaticCallTarget,
   type EvaluationPlan,
+  type SourceRange,
 } from './analyze'
 import { evalExtractedModule } from './eval'
 import { serializeJson } from './serialize'
@@ -21,6 +24,19 @@ interface Replacement {
   start: number
   end: number
   text: string
+}
+
+interface AutomaticReplacement {
+  start: number
+  end: number
+  staticText: string
+  emitText: string
+  runtimeBoundary: boolean
+  materializer?: ImportedFunctionRef
+}
+
+interface FinalReplacement extends Replacement {
+  materializer?: ImportedFunctionRef
 }
 
 function reasonOf(cause: unknown): string {
@@ -42,8 +58,10 @@ function reportFailure(
   throw new Error(msg, cause === undefined ? undefined : { cause })
 }
 
-function effectiveReplacements(replacements: readonly Replacement[]): Replacement[] {
-  const selected: Replacement[] = []
+function effectiveReplacements<T extends { start: number; end: number }>(
+  replacements: readonly T[],
+): T[] {
+  const selected: T[] = []
   for (const replacement of [...replacements].sort(
     (a, b) => (b.end - b.start) - (a.end - a.start) || a.start - b.start,
   )) {
@@ -55,23 +73,74 @@ function effectiveReplacements(replacements: readonly Replacement[]): Replacemen
   return selected.sort((a, b) => a.start - b.start)
 }
 
-function renderReplacements(code: string, replacements: readonly Replacement[]): string {
-  let output = code
-  for (const replacement of [...effectiveReplacements(replacements)].reverse()) {
-    output = output.slice(0, replacement.start) + replacement.text + output.slice(replacement.end)
+function renderAutomaticStatic(
+  code: string,
+  replacements: readonly AutomaticReplacement[],
+): { code: string; runtimeBoundaries: SourceRange[] } {
+  let output = ''
+  let cursor = 0
+  const runtimeBoundaries: SourceRange[] = []
+  for (const replacement of effectiveReplacements(replacements)) {
+    output += code.slice(cursor, replacement.start)
+    const start = output.length
+    output += replacement.staticText
+    if (replacement.runtimeBoundary) {
+      runtimeBoundaries.push({ start, end: output.length })
+    }
+    cursor = replacement.end
   }
-  return output
+  output += code.slice(cursor)
+  return { code: output, runtimeBoundaries }
 }
 
-function mapOffset(offset: number, replacements: readonly Replacement[]): number {
+function mapAutomaticOffset(
+  offset: number,
+  replacements: readonly AutomaticReplacement[],
+): number {
   let mapped = offset
   for (const replacement of effectiveReplacements(replacements)) {
     if (replacement.end > offset) break
-    mapped += replacement.text.length - (replacement.end - replacement.start)
+    mapped += replacement.staticText.length - (replacement.end - replacement.start)
   }
   return mapped
 }
 
+function refKey(ref: ImportedFunctionRef): string {
+  return `${ref.from}\0${ref.import}`
+}
+
+function allocateMaterializerLocals(
+  code: string,
+  rules: NonNullable<Options['rules']>,
+  filename: string,
+): Map<string, string> {
+  const used = collectUsedIdentifierNames(code, filename)
+  const locals = new Map<string, string>()
+  for (const rule of rules) {
+    if (!rule.materialize) continue
+    const key = refKey(rule.materialize)
+    if (locals.has(key)) continue
+    let index = 0
+    let local = '__preeval_materialize'
+    while (used.has(local)) local = `__preeval_materialize_${++index}`
+    used.add(local)
+    locals.set(key, local)
+  }
+  return locals
+}
+
+function renderMaterializerImport(ref: ImportedFunctionRef, local: string): string {
+  const source = JSON.stringify(ref.from)
+  if (ref.import === 'default') return `import ${local} from ${source};`
+  const imported = t.isValidIdentifier(ref.import) ? ref.import : JSON.stringify(ref.import)
+  return `import { ${imported} as ${local} } from ${source};`
+}
+
+function runtimeImportInsertionOffset(code: string): number {
+  if (!code.startsWith('#!')) return 0
+  const newline = code.indexOf('\n')
+  return newline === -1 ? code.length : newline + 1
+}
 function automaticEvaluationOrder(
   targets: readonly AutomaticCallTarget[],
 ): AutomaticCallTarget[] {
@@ -123,11 +192,12 @@ export async function transformPreeval(
   const cut = id.search(/[?#]/)
   const file = cut === -1 ? id : id.slice(0, cut)
   const globalPolicy = options.onFailure ?? 'warn'
-  const rules = options.imports ?? []
+  const rules = options.rules ?? []
+  const materializerLocals = allocateMaterializerLocals(code, rules, file)
   const originalMarked = findMarkedPreevalTargets(code, file)
   const originalMarkedByName = new Map(originalMarked.map((target) => [target.name, target]))
   const automaticTargets = findAutomaticPreevalCalls(code, rules, file)
-  const automaticReplacements: Replacement[] = []
+  const automaticReplacements: AutomaticReplacement[] = []
   const failedAutomatic = new Set<AutomaticCallTarget>()
   const successfulBindings = new Set<string>()
 
@@ -140,14 +210,21 @@ export async function transformPreeval(
       continue
     }
 
-    const intermediate = renderReplacements(code, automaticReplacements)
-    const currentStart = mapOffset(target.start, automaticReplacements)
+    const intermediate = renderAutomaticStatic(code, automaticReplacements)
+    const currentStart = mapAutomaticOffset(target.start, automaticReplacements)
     const policy = target.rule.onFailure ?? globalPolicy
+    const label = `${target.rule.match.from}#${target.rule.match.import}`
     let plan: EvaluationPlan
     try {
-      plan = analyzeAutomaticPreevalCall(intermediate, currentStart, target.rule, file)
+      plan = analyzeAutomaticPreevalCall(
+        intermediate.code,
+        currentStart,
+        target.rule,
+        file,
+        { runtimeBoundaries: intermediate.runtimeBoundaries },
+      )
     } catch (cause) {
-      const msg = `[preeval] ${file}:${target.line}:${target.column + 1} ${target.rule.from}#${target.rule.import} failed: ${reasonOf(cause)}`
+      const msg = `[preeval] ${file}:${target.line}:${target.column + 1} ${label} failed: ${reasonOf(cause)}`
       reportFailure(policy, msg, ctx, cause)
       failedAutomatic.add(target)
       continue
@@ -157,7 +234,7 @@ export async function transformPreeval(
     try {
       values = await evaluatePlan(file, plan, options.allowNode)
     } catch (cause) {
-      const msg = `[preeval] ${file}:${target.line}:${target.column + 1} ${target.rule.from}#${target.rule.import} failed: ${reasonOf(cause)}`
+      const msg = `[preeval] ${file}:${target.line}:${target.column + 1} ${label} failed: ${reasonOf(cause)}`
       reportFailure(policy, msg, ctx, cause)
       failedAutomatic.add(target)
       continue
@@ -165,22 +242,34 @@ export async function transformPreeval(
 
     const resultTarget = plan.targets[0]!
     if (!values.has(resultTarget.name)) {
-      const msg = `[preeval] ${file}:${target.line}:${target.column + 1} ${target.rule.from}#${target.rule.import} failed: result was not found on the evaluated module namespace`
+      const msg = `[preeval] ${file}:${target.line}:${target.column + 1} ${label} failed: result was not found on the evaluated module namespace`
       reportFailure(policy, msg, ctx)
       failedAutomatic.add(target)
       continue
     }
 
-    let text: string
+    let staticText: string
     try {
-      text = serializeJson(values.get(resultTarget.name))
+      staticText = serializeJson(values.get(resultTarget.name))
     } catch (cause) {
-      const msg = `[preeval] ${file}:${target.line}:${target.column + 1} ${target.rule.from}#${target.rule.import} failed: result is not JSON-superset (${reasonOf(cause)})`
+      const msg = `[preeval] ${file}:${target.line}:${target.column + 1} ${label} failed: result is not JSON-superset (${reasonOf(cause)})`
       reportFailure(policy, msg, ctx, cause)
       failedAutomatic.add(target)
       continue
     }
-    automaticReplacements.push({ start: target.start, end: target.end, text })
+
+    const materializer = target.rule.materialize
+    const emitText = materializer
+      ? `${materializerLocals.get(refKey(materializer))!}(${staticText})`
+      : staticText
+    automaticReplacements.push({
+      start: target.start,
+      end: target.end,
+      staticText,
+      emitText,
+      runtimeBoundary: materializer !== undefined,
+      ...(materializer ? { materializer } : {}),
+    })
     successfulBindings.add(target.bindingName)
   }
 
@@ -189,14 +278,22 @@ export async function transformPreeval(
     if (target.containingMarkedName) skippedMarkedNames.add(target.containingMarkedName)
   }
 
-  const automaticOutput = renderReplacements(code, automaticReplacements)
+  const automaticOutput = renderAutomaticStatic(code, automaticReplacements)
   const markedReplacements: Replacement[] = []
   let markedPlan: EvaluationPlan | null = null
   try {
-    markedPlan = analyzePreevalModule(automaticOutput, file, { skipMarkedNames: skippedMarkedNames })
+    markedPlan = analyzePreevalModule(automaticOutput.code, file, {
+      skipMarkedNames: skippedMarkedNames,
+      runtimeBoundaries: automaticOutput.runtimeBoundaries,
+    })
   } catch (cause) {
     const msg = `[preeval] ${file}: ${reasonOf(cause)}`
     reportFailure(globalPolicy, msg, ctx, cause)
+  }
+
+  for (const blocked of markedPlan?.blockedTargets ?? []) {
+    const msg = `[preeval] ${file}: marked const "${blocked.name}" failed: target depends on a runtime materializer boundary`
+    reportFailure(globalPolicy, msg, ctx)
   }
 
   if (markedPlan && markedPlan.targets.length > 0) {
@@ -234,8 +331,14 @@ export async function transformPreeval(
     }
   }
 
-  const replacements = effectiveReplacements([
-    ...automaticReplacements,
+  const finalAutomatic: FinalReplacement[] = automaticReplacements.map((replacement) => ({
+    start: replacement.start,
+    end: replacement.end,
+    text: replacement.emitText,
+    ...(replacement.materializer ? { materializer: replacement.materializer } : {}),
+  }))
+  const replacements = effectiveReplacements<FinalReplacement>([
+    ...finalAutomatic,
     ...markedReplacements,
   ])
   if (replacements.length === 0) return null
@@ -246,12 +349,28 @@ export async function transformPreeval(
     replacements,
     file,
   )
+  const usedMaterializers = new Map<string, ImportedFunctionRef>()
+  for (const replacement of replacements) {
+    if (replacement.materializer) {
+      usedMaterializers.set(refKey(replacement.materializer), replacement.materializer)
+    }
+  }
+
   const s = new MagicString(code)
   for (const replacement of replacements) {
     s.overwrite(replacement.start, replacement.end, replacement.text)
   }
   for (const edit of cleanup) {
     s.overwrite(edit.start, edit.end, edit.replacement)
+  }
+
+  if (usedMaterializers.size > 0) {
+    const importBlock = [...usedMaterializers.entries()]
+      .map(([key, ref]) => renderMaterializerImport(ref, materializerLocals.get(key)!))
+      .join('\n') + '\n'
+    const offset = runtimeImportInsertionOffset(code)
+    if (offset === 0) s.prepend(importBlock)
+    else s.appendLeft(offset, importBlock)
   }
 
   return {

@@ -4,9 +4,9 @@ import { unpluginFactory } from './index'
 
 export type {
   FailurePolicy,
-  ImportedFunctionRule,
-  ImportedFunctionSubstitute,
+  ImportedFunctionRef,
   Options,
+  PreevalRule,
 } from './types'
 
 export default createBunPlugin<Options | undefined>(unpluginFactory)

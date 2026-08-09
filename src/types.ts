@@ -1,22 +1,22 @@
 /** Behavior when a pre-evaluation target cannot be replaced. */
 export type FailurePolicy = 'ignore' | 'warn' | 'error'
 
-/** Build-time-only replacement for an imported function. */
-export interface ImportedFunctionSubstitute {
-  /** Exact ESM source specifier used by the temporary evaluation module. */
+/** Exact ESM function reference used by one pre-evaluation phase. */
+export interface ImportedFunctionRef {
+  /** Exact ESM source specifier. */
   from: string
   /** ESM export name. Use "default" for the default export. */
   import: string
 }
 
-/** Exact statically imported ESM function selected for automatic pre-evaluation. */
-export interface ImportedFunctionRule {
-  /** Exact source string from the original import declaration. */
-  from: string
-  /** ESM export name. Use "default" for the default export. */
-  import: string
-  /** Optional callee used only in the temporary evaluation module. */
-  substitute?: ImportedFunctionSubstitute
+/** Explicit match → evaluate → optional runtime materialize rule. */
+export interface PreevalRule {
+  /** Original imported call or tagged template selected in author source. */
+  match: ImportedFunctionRef
+  /** Build-time evaluator. Defaults to `match`. */
+  evaluate?: ImportedFunctionRef
+  /** Runtime-only single-argument materializer for the serialized result. */
+  materialize?: ImportedFunctionRef
   /** Override the global failure policy for this rule. */
   onFailure?: FailurePolicy
 }
@@ -25,8 +25,8 @@ export interface ImportedFunctionRule {
 export interface Options {
   /** Failure policy shared by marks and automatic calls. Default "warn". */
   onFailure?: FailurePolicy
-  /** Imported ESM functions whose direct calls should be pre-evaluated. */
-  imports?: ImportedFunctionRule[]
+  /** Imported ESM functions selected for automatic pre-evaluation. */
+  rules?: PreevalRule[]
   /**
    * When true, evaluation may freely use Node/Bun APIs already in the host.
    * When false (default), we do not inject extra Node helpers; there is NO sandbox.
