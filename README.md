@@ -106,15 +106,21 @@ Rejected: `undefined`, `NaN`, `±Infinity`, `bigint`, functions, symbols, `Date`
 - Use it on the author-side publish build (tsup, Vite, Rollup, Bun.build) — not in consumer apps.
 - Evaluation runs only the **lexical dependency closure** of marked consts in the same file (imports, top-level `const`, function/class/enum declarations). Unrelated top-level statements and side-effect-only imports are not executed.
 - Local dependencies must be **stable bindings**: `import`, top-level `const`, function declaration, class declaration, or `enum`. `let`/`var`, reassignment, and intervening top-level mutations of the closure are rejected (warn/error per `strict`).
-- Cross-module: only the used import specifiers are kept; **imported modules still load fully** (no recursive project-graph trimming).
+- Cross-module: only the used import specifiers are kept; **imported modules still load fully** (no recursive project-graph trimming). Side-effect-only imports before a mark are refused when the closure still pulls value imports (they may mutate those modules).
+- Interference checks are **per remaining mark**: a statement between two marks is only checked against targets that appear after it. Never-called top-level function/class declarations are ignored unless a pre-target call site can reach them.
 - TypeScript:
   - **Bun**: evaluates TS/TSX natively (including relative `.ts` imports).
   - **Node**: the plugin runs `sucrase` on the *extracted entry* only (optional `sucrase` peer). Relative TypeScript dependencies under Node need a host loader, or keep those deps as plain JS with explicit extensions.
 - Prefer one-shot publish builds. Dependency modules are cached by the host ESM loader for the process lifetime; watch-mode re-eval of graphs that import shared deps is not a v1 guarantee.
 - `allowNode` is an acknowledgment of trust, not isolation: extracted code runs as-is in the host runtime (Bun or Node during build) and can already use any host API. Static extraction shrinks the side-effect surface; it is not a sandbox.
 - Hidden shared state from imported modules or ambient globals is outside single-file static proof and remains a documentation boundary.
+- **Static-analysis limits** (not fully modeled; may produce wrong values without a refusal, or fail under `strict` when resolution cannot be proven):
+  - Dynamic code such as `eval(...)`, `new Function(...)`, and other string-driven execution that mutates closure state.
+  - Bundler-only resolution: virtual modules, path aliases, and package exports that Node/Bun cannot load from a temp file next to the source (default: warn + skip the module; `strict`: build error).
+  - `import.meta` inside a closure is refused (the eval temp path would leak).
 - No declaration-file (.d.ts) rewriting in v1 — annotated values are still typed as written in the source.
 - No first-class webpack support in v1.
+
 
 ## How it works
 

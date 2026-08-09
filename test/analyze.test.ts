@@ -240,13 +240,16 @@ const answer = base + 2
     expect(plan!.code).not.toContain('polyfill')
   })
 
-  it('rejects hoisted function decls after a target that touch the closure', () => {
+  it('allows never-called function decls that only read the closure', () => {
     const code = `const obj = { n: 1 }
+function debug() { console.log(obj) }
 // @preeval
 const answer = obj.n
-function bump() { obj.n = 2 }
 `
-    expect(() => analyzePreevalModule(code)).toThrow(/hoisted declaration|closure binding/)
+    const plan = analyzePreevalModule(code)
+    expect(plan).not.toBeNull()
+    expect(plan!.code).toContain('const obj')
+    expect(plan!.code).not.toContain('debug')
   })
 
   it('rejects pre-target calls that rely on post-target hoisted mutators', () => {
@@ -258,6 +261,47 @@ function bump() { obj.n = 2 }
 `
     expect(() => analyzePreevalModule(code)).toThrow(/hoisted declaration|closure binding/)
   })
+
+  it('rejects reachable hoisted mutators via another function', () => {
+    const code = `const obj = { n: 1 }
+function bump() { obj.n = 2 }
+function run() { bump() }
+run()
+// @preeval
+const answer = obj.n
+`
+    expect(() => analyzePreevalModule(code)).toThrow(/hoisted declaration|closure binding/)
+  })
+
+  it('allows multi-mark statements that only touch already-evaluated deps', () => {
+    const code = `const obj = { n: 1 }
+// @preeval
+const a = obj.n
+console.log(obj)
+// @preeval
+const b = 2
+export { a, b }
+`
+    const plan = analyzePreevalModule(code)
+    expect(plan).not.toBeNull()
+    expect(plan!.targets.map((t) => t.name)).toEqual(['a', 'b'])
+    expect(plan!.code).toContain('const obj')
+    expect(plan!.code).not.toContain('console.log')
+  })
+
+  it('rejects multi-mark statements that touch a later target closure', () => {
+    const code = `const obj = { n: 1 }
+function bump() { obj.n = 2 }
+// @preeval
+const a = obj.n
+bump()
+// @preeval
+const b = obj.n
+export { a, b }
+`
+    expect(() => analyzePreevalModule(code)).toThrow(/hoisted declaration|closure binding/)
+  })
+
 
   it('indexes export default function dependencies', () => {
     const code = `export default function helper() { return 40 }

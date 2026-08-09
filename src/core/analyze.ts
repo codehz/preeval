@@ -432,38 +432,181 @@ function unselectedSiblingDeclarators(
  * text sits after every marked const.
  */
 function isHoistableDeclaration(stmt: Statement): boolean {
+  return hoistableName(stmt) != null
+}
+
+function hoistableName(stmt: Statement): string | null {
   const inner = unwrapExport(stmt)
-  return (
-    (inner.type === 'FunctionDeclaration' && inner.id != null)
-    || (inner.type === 'ClassDeclaration' && inner.id != null)
-  )
+  if (inner.type === 'FunctionDeclaration' && inner.id) return inner.id.name
+  if (inner.type === 'ClassDeclaration' && inner.id) return inner.id.name
+  return null
+}
+
+/** Lexical dependency closure for one or more root binding names. */
+function buildNameClosure(
+  roots: Iterable<string>,
+  programScope: Scope,
+  localDecls: Map<string, LocalDecl>,
+): Set<string> {
+  const closure = new Set<string>()
+  const queue = [...roots]
+
+  while (queue.length > 0) {
+    const name = queue.pop()!
+    if (closure.has(name)) continue
+    closure.add(name)
+
+    const decl = localDecls.get(name)
+    if (decl == null) {
+      throw new Error(
+        `preeval: unresolved dependency "${name}" (only top-level const/function/class/enum/import are supported)`,
+      )
+    }
+    validateStableDep(decl)
+
+    for (const dep of depsOfDecl(decl, programScope, localDecls)) {
+      if (!closure.has(dep)) queue.push(dep)
+    }
+    for (const sibling of unselectedSiblingDeclarators(name, localDecls, closure)) {
+      queue.push(sibling)
+    }
+  }
+
+  return closure
+}
+
+/** Union of per-target closures for targets whose statement starts after `stmtStart`. */
+function remainingClosureNames(
+  stmtStart: number,
+  targets: { name: string; stmt: Statement }[],
+  perTargetClosures: Map<string, Set<string>>,
+): Set<string> {
+  const names = new Set<string>()
+  for (const target of targets) {
+    const targetStart = assertNumber(target.stmt.start, 'target start')
+    if (stmtStart >= targetStart) continue
+    const sub = perTargetClosures.get(target.name)
+    if (sub == null) continue
+    for (const n of sub) names.add(n)
+  }
+  return names
+}
+
+function collectWrittenProgramNames(
+  root: NodePath,
+  programScope: Scope,
+  localDecls: Map<string, LocalDecl>,
+): Set<string> {
+  const names = new Set<string>()
+  root.traverse({
+    enter(path) {
+      if (isPureTypeNode(path.node)) path.skip()
+    },
+    AssignmentExpression(path) {
+      for (const n of writtenProgramNames(path.node.left, programScope, localDecls)) {
+        names.add(n)
+      }
+    },
+    UpdateExpression(path) {
+      for (const n of writtenProgramNames(path.node.argument, programScope, localDecls)) {
+        names.add(n)
+      }
+    },
+  })
+  return names
 }
 
 /**
- * Reject non-closure top-level statements that run before a target and touch
- * the closure (reads or writes). Skipping them would change evaluation order.
- * Hoisted function/class declarations are scanned file-wide for the same reason.
+ * Reject non-closure top-level effects that can change a not-yet-evaluated
+ * target's value when skipped by extraction.
+ *
+ * - Statements are checked only against the **remaining** targets (source
+ *   position after the statement) — multi-mark reads of already-evaluated
+ *   deps are allowed (D7).
+ * - Non-closure function/class declarations are not rejected merely for
+ *   referencing the closure; they are rejected only when a pre-remaining-target
+ *   call site can reach them (D6).
  */
 function assertNoInterferingStatements(
   programPath: NodePath<t.Program>,
   targets: { name: string; stmt: Statement }[],
   closure: Set<string>,
   localDecls: Map<string, LocalDecl>,
+  perTargetClosures: Map<string, Set<string>>,
 ): void {
   const programScope = programPath.scope
   const targetStarts = targets.map((t) => assertNumber(t.stmt.start, 'target start'))
   const closureHasImports = [...closure].some((n) => localDecls.get(n)?.kind === 'import')
 
+  // Non-closure hoistables: body effects matter only if a call site reaches them.
+  const hoistables = new Map<
+    string,
+    { path: NodePath; free: Set<string>; written: Set<string> }
+  >()
+  for (const stmtPath of programPath.get('body')) {
+    const name = hoistableName(stmtPath.node)
+    if (name == null || closure.has(name)) continue
+    hoistables.set(name, {
+      path: stmtPath,
+      free: collectProgramFreeNames(stmtPath, programScope, localDecls),
+      written: collectWrittenProgramNames(stmtPath, programScope, localDecls),
+    })
+  }
+  const hoistableNames = new Set(hoistables.keys())
+
+  const callEdges = new Map<string, Set<string>>()
+  for (const [name, info] of hoistables) {
+    const callees = new Set<string>()
+    for (const free of info.free) {
+      if (hoistableNames.has(free) && free !== name) callees.add(free)
+    }
+    callEdges.set(name, callees)
+  }
+
+  const reachableHoistables = (roots: Iterable<string>): Set<string> => {
+    const seen = new Set<string>()
+    const queue = [...roots]
+    while (queue.length > 0) {
+      const name = queue.pop()!
+      if (seen.has(name) || !hoistables.has(name)) continue
+      seen.add(name)
+      for (const callee of callEdges.get(name) ?? []) {
+        if (!seen.has(callee)) queue.push(callee)
+      }
+    }
+    return seen
+  }
+
+  const throwIfTouches = (
+    names: Iterable<string>,
+    remaining: Set<string>,
+    kind: 'read' | 'write' | 'hoisted',
+  ): void => {
+    for (const name of names) {
+      if (!remaining.has(name)) continue
+      if (kind === 'write') {
+        throw new Error(
+          `preeval: assignment to closure binding "${name}" before a marked const; refusing to extract`,
+        )
+      }
+      if (kind === 'hoisted') {
+        throw new Error(
+          `preeval: hoisted declaration references closure binding "${name}"; refusing to extract (call sites before a marked const could observe mutations)`,
+        )
+      }
+      throw new Error(
+        `preeval: statement before marked const references closure binding "${name}"; refusing to extract (would skip intervening effects)`,
+      )
+    }
+  }
+
   for (const stmtPath of programPath.get('body')) {
     const stmt = stmtPath.node
     const stmtStart = assertNumber(stmt.start, 'statement start')
     const beforeAnyTarget = targetStarts.some((ts) => stmtStart < ts)
-    const hoistable = isHoistableDeclaration(stmt)
+    const remaining = remainingClosureNames(stmtStart, targets, perTargetClosures)
 
-    // Post-target non-hoisted statements cannot affect target initializers.
-    if (!beforeAnyTarget && !hoistable) continue
-
-    // Statements fully covered by the closure are emitted and run in order.
+    // Statements fully covered by the joint closure are emitted and run in order.
     if (statementCoveredByClosure(stmt, closure)) continue
 
     // Side-effect imports (`import './x'` or only type specs) are dropped from
@@ -483,49 +626,34 @@ function assertNoInterferingStatements(
       }
     }
 
+    // Decl bodies are checked via call-site reachability (D6), not declaration text.
+    if (isHoistableDeclaration(stmt)) continue
+
+    // Nothing left to evaluate after this statement → cannot affect any target init.
+    if (remaining.size === 0) continue
+
     const free = collectProgramFreeNames(stmtPath, programScope, localDecls)
+    throwIfTouches(free, remaining, 'read')
+
+    const written = collectWrittenProgramNames(stmtPath, programScope, localDecls)
+    throwIfTouches(written, remaining, 'write')
+
+    // Potential invokes of non-closure hoistables (free ref is a conservative proxy).
+    const roots: string[] = []
     for (const name of free) {
-      if (closure.has(name)) {
-        throw new Error(
-          hoistable && !beforeAnyTarget
-            ? `preeval: hoisted declaration references closure binding "${name}"; refusing to extract (call sites before a marked const could observe mutations)`
-            : `preeval: statement before marked const references closure binding "${name}"; refusing to extract (would skip intervening effects)`,
-        )
-      }
+      if (hoistableNames.has(name)) roots.push(name)
     }
+    if (roots.length === 0) continue
 
-    // Assignment targets are not always "referenced"; only matters for code that
-    // actually runs before a target (hoisted decl bodies already covered above).
-    if (!beforeAnyTarget) continue
-
-    stmtPath.traverse({
-      enter(path) {
-        if (isPureTypeNode(path.node)) path.skip()
-      },
-      AssignmentExpression(path) {
-        const left = path.node.left
-        const written = writtenProgramNames(left, programScope, localDecls)
-        for (const name of written) {
-          if (closure.has(name)) {
-            throw new Error(
-              `preeval: assignment to closure binding "${name}" before a marked const; refusing to extract`,
-            )
-          }
-        }
-      },
-      UpdateExpression(path) {
-        const written = writtenProgramNames(path.node.argument, programScope, localDecls)
-        for (const name of written) {
-          if (closure.has(name)) {
-            throw new Error(
-              `preeval: update of closure binding "${name}" before a marked const; refusing to extract`,
-            )
-          }
-        }
-      },
-    })
+    for (const fn of reachableHoistables(roots)) {
+      const info = hoistables.get(fn)
+      if (info == null) continue
+      throwIfTouches(info.free, remaining, 'hoisted')
+      throwIfTouches(info.written, remaining, 'write')
+    }
   }
 }
+
 
 function writtenProgramNames(
   node: t.LVal | t.Expression | t.OptionalMemberExpression,
@@ -772,28 +900,18 @@ export function analyzePreevalModule(
     }
   }
 
-  const closure = new Set<string>()
-  const queue = rawTargets.map((t) => t.name)
+  const closure = buildNameClosure(
+    rawTargets.map((t) => t.name),
+    programScope,
+    localDecls,
+  )
 
-  while (queue.length > 0) {
-    const name = queue.pop()!
-    if (closure.has(name)) continue
-    closure.add(name)
-
-    const decl = localDecls.get(name)
-    if (decl == null) {
-      throw new Error(
-        `preeval: unresolved dependency "${name}" (only top-level const/function/class/enum/import are supported)`,
-      )
-    }
-    validateStableDep(decl)
-
-    for (const dep of depsOfDecl(decl, programScope, localDecls)) {
-      if (!closure.has(dep)) queue.push(dep)
-    }
-    for (const sibling of unselectedSiblingDeclarators(name, localDecls, closure)) {
-      queue.push(sibling)
-    }
+  const perTargetClosures = new Map<string, Set<string>>()
+  for (const target of rawTargets) {
+    perTargetClosures.set(
+      target.name,
+      buildNameClosure([target.name], programScope, localDecls),
+    )
   }
 
   assertNoInterferingStatements(
@@ -801,7 +919,9 @@ export function analyzePreevalModule(
     rawTargets,
     closure,
     localDecls,
+    perTargetClosures,
   )
+
 
   const evalNames = allocateEvalExportNames(
     rawTargets.map((t) => t.name),

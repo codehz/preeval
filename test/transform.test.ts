@@ -362,10 +362,30 @@ export { answer }
     expect(warns[0]).toMatch(/^ERR:/)
   })
 
-  it('non-strict: hoisted post-target mutator warns and skips module', async () => {
+  it('allows never-called hoisted readers of the closure', async () => {
     const dir = tmpDir()
     const entry = join(dir, 'entry.js')
     const code = `const obj = { n: 1 }
+function debug() { console.log(obj) }
+// @preeval
+const answer = obj.n
+export { answer }
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(code, entry, {}, ctx)
+
+    expect(res).not.toBeNull()
+    expect(res!.code).toContain('const answer = 1')
+    expect(warns).toEqual([])
+  })
+
+  it('non-strict: reachable hoisted post-target mutator warns and skips module', async () => {
+    const dir = tmpDir()
+    const entry = join(dir, 'entry.js')
+    const code = `const obj = { n: 1 }
+bump()
 // @preeval
 const answer = obj.n
 export { answer }
@@ -381,10 +401,11 @@ function bump() { obj.n = 2 }
     expect(warns[0]).toMatch(/hoisted declaration|closure binding/)
   })
 
-  it('strict: hoisted post-target mutator errors and throws', async () => {
+  it('strict: reachable hoisted post-target mutator errors and throws', async () => {
     const dir = tmpDir()
     const entry = join(dir, 'entry.js')
     const code = `const obj = { n: 1 }
+bump()
 // @preeval
 const answer = obj.n
 export { answer }
@@ -398,6 +419,29 @@ function bump() { obj.n = 2 }
     )
     expect(warns).toHaveLength(1)
     expect(warns[0]).toMatch(/^ERR:/)
+  })
+
+  it('multi-mark: allows harmless statements that only touch earlier deps', async () => {
+    const dir = tmpDir()
+    const entry = join(dir, 'entry.js')
+    const code = `const obj = { n: 1 }
+// @preeval
+const a = obj.n
+console.log(obj)
+// @preeval
+const b = 2
+export { a, b }
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(code, entry, {}, ctx)
+
+    expect(res).not.toBeNull()
+    expect(res!.code).toContain('const a = 1')
+    expect(res!.code).toContain('const b = 2')
+    expect(res!.code).toContain('console.log(obj)')
+    expect(warns).toEqual([])
   })
 
   it('evaluates through export default function dependencies', async () => {
