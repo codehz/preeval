@@ -102,7 +102,7 @@ Rejected: `undefined`, `NaN`, `±Infinity`, `bigint`, functions, symbols, `Date`
 - Marked modules are evaluated in full at build time: all top-level side effects run, so the module must stand alone (its relative imports are resolved from the temp file next to the source).
 - TypeScript:
   - **Bun**: evaluates TS/TSX natively (including relative `.ts` imports).
-  - **Node**: the plugin runs `typescript.transpileModule` on the *entry* file only (optional `typescript` peer). Relative TypeScript dependencies under Node need a host loader, or keep those deps as plain JS with explicit extensions.
+  - **Node**: the plugin runs `sucrase` on the *entry* file only (optional `sucrase` peer). Relative TypeScript dependencies under Node need a host loader, or keep those deps as plain JS with explicit extensions.
 - Prefer one-shot publish builds. Dependency modules are cached by the host ESM loader for the process lifetime; watch-mode re-eval of graphs that import shared deps is not a v1 guarantee.
 - `allowNode` is an acknowledgment of trust, not isolation: evaluated code runs as-is in the host runtime (Bun or Node during build) and can already use any host API.
 - No declaration-file (.d.ts) rewriting in v1 — annotated values are still typed as written in the source.
@@ -111,5 +111,5 @@ Rejected: `undefined`, `NaN`, `±Infinity`, `bigint`, functions, symbols, `Date`
 ## How it works
 
 1. **Detect** — the source is parsed with Babel (TS grammar for `.ts`, TSX for `.tsx`); top-level exported `const`s whose nearest preceding comment is `// @preeval` are collected (single declarator only; type-only exports ignored).
-2. **Evaluate** — the whole module is written to a uniquely named temp file next to the source (kept as TS on Bun; transpiled to `.mjs` on Node when needed) and loaded with a dynamic `import`; marked bindings are read off the module namespace. The temp file is removed afterwards.
+2. **Evaluate** — the whole module is written to a uniquely named temp file next to the source (kept as TS on Bun; transpiled with `sucrase` to `.mjs` on Node when needed) and loaded with a dynamic `import`; marked bindings are read off the module namespace. The temp file is removed afterwards.
 3. **Replace** — each marked initializer's source span is overwritten with `JSON.stringify` of the evaluated value via magic-string, producing updated code plus a sourcemap.

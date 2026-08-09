@@ -36,7 +36,7 @@ bundler (vite|rollup|bun)
 
 **Eval notes**:
 - Temp file: `.preeval-<pid>-<time36>-<hex><ext>` written **next to** the source so relative imports resolve; always deleted in `finally`.
-- Bun: native TS/TSX; Node: optional peer `typescript` transpiles **entry only** → `.mjs`.
+- Bun: native TS/TSX; Node: optional peer `sucrase` transpiles **entry only** → `.mjs`.
 - `allowNode` is trust-only (currently a no-op via `void options.allowNode`); no sandbox.
 - Never use `eval()`; always dynamic `import()`.
 
@@ -85,7 +85,7 @@ There is no lint/format/coverage script. Typecheck is implicit via editor/tsdown
 | `src/index.ts` | Public unplugin factory, filters, transform hook |
 | `src/core/transform.ts` | Full pipeline + failure policy |
 | `src/core/detect.ts` | Marker / export detection contract |
-| `src/core/eval.ts` | Bun vs Node prep, temp-file lifecycle |
+| `src/core/eval.ts` | Bun vs Node prep, sucrase peer, temp-file lifecycle |
 | `src/core/serialize.ts` | JSON-superset whitelist |
 | `src/types.ts` | Public `Options` |
 | `package.json` | exports map (`.`, `./vite`, `./rollup`, `./bun`) |
@@ -103,7 +103,7 @@ There is no lint/format/coverage script. Typecheck is implicit via editor/tsdown
 | DTS | `resolver: 'tsc'`, `deps.dts.neverBundle: true`, `skipLibCheck` |
 | Plugin framework | **unplugin** v3 |
 | Parsing / rewrite | `@babel/parser`, `magic-string` |
-| Optional peer | `typescript` ^5 (Node TS eval only) |
+| Optional peer | `sucrase` ^3 (Node TS eval only) |
 
 Do not introduce CJS dual-package, webpack adapters, or sandboxed eval without an intentional design change.
 
@@ -112,9 +112,8 @@ Do not introduce CJS dual-package, webpack adapters, or sandboxed eval without a
 - **Framework**: Vitest 4, zero config (`test/*.test.ts` auto-discovered).
 - **Command**: `bun run test` → `vitest run`.
 - **Import style**: tests hit `../src/core/*` source; no build required.
-- **Layout** (mirror core leaves):
   - `test/detect.test.ts` — unit, inline source strings, span offsets
-  - `test/serialize.test.ts` — `describe.each` accept/reject tables
+  - `test/serialize.test.ts` — `isJsonValue` / `serializeJson` accept/reject tables
+  - `test/eval.test.ts` — Node-path force via `runtime.isBun: false` (sucrase); Bun default path
   - `test/transform.test.ts` — integration: real temp dirs, FS writes, dynamic imports; stub `TransformContext`
-- **Patterns**: plain `describe`/`it`/`expect`; no `vi` mocks, snapshots, fixture dirs, or coverage gates.
-- When changing detect/serialize/transform contracts, extend the matching test file; keep failure-policy cases for both `strict` and default paths.
+- When changing detect/serialize/eval/transform contracts, extend the matching test file; keep failure-policy cases for both `strict` and default paths.
