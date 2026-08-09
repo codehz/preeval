@@ -1,6 +1,6 @@
 {
   "name": "@codehz/preeval",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Build-time pre-evaluation of // @preeval marked top-level consts for library publish builds",
   "type": "module",
   "license": "MIT",
