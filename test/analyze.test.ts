@@ -1,0 +1,211 @@
+import { describe, expect, it } from 'vitest'
+import { analyzePreevalModule } from '../src/core/analyze'
+
+/** Resolve the exact init span of `expr` inside `code`. */
+function spanOf(code: string, expr: string): { initStart: number; initEnd: number } {
+  const start = code.indexOf(expr)
+  expect(start).toBeGreaterThanOrEqual(0)
+  return { initStart: start, initEnd: start + expr.length }
+}
+
+describe('analyzePreevalModule', () => {
+  it('detects name/init spans for export const', () => {
+    const code = `// @preeval
+export const marked = 1 + 2
+`
+    const plan = analyzePreevalModule(code)
+    expect(plan).not.toBeNull()
+    expect(plan!.targets).toHaveLength(1)
+    const m = plan!.targets[0]!
+    expect(m.name).toBe('marked')
+    expect(m.evalExportName).toMatch(/^__preeval_\d+$/)
+    expect(m.initStart).toBe(spanOf(code, '1 + 2').initStart)
+    expect(m.initEnd).toBe(spanOf(code, '1 + 2').initEnd)
+    expect(code.slice(m.initStart, m.initEnd)).toBe('1 + 2')
+    expect(plan!.code).toContain('const marked = 1 + 2')
+    expect(plan!.code).toContain(`export { marked as ${m.evalExportName}`)
+  })
+
+  it('detects const + export { name }', () => {
+    const code = `// @preeval
+const foo = 'hello'
+export { foo }
+`
+    const plan = analyzePreevalModule(code)
+    expect(plan).not.toBeNull()
+    expect(plan!.targets[0]).toMatchObject({ name: 'foo' })
+  })
+
+  it('accepts non-exported marked consts', () => {
+    const code = `// @preeval
+const x = 1 + 1
+`
+    const plan = analyzePreevalModule(code)
+    expect(plan).not.toBeNull()
+    expect(plan!.targets[0]?.name).toBe('x')
+  })
+
+  it('allows blank lines between the marker and the declaration', () => {
+    const code = `// @preeval
+
+
+export const x = 1
+`
+    const plan = analyzePreevalModule(code)
+    expect(plan).not.toBeNull()
+    expect(plan!.targets[0]?.name).toBe('x')
+  })
+
+  it('rejects a block comment marker', () => {
+    const code = `/* @preeval */
+export const x = 1
+`
+    expect(analyzePreevalModule(code)).toBeNull()
+  })
+
+  it('skips multi-declarator target declarations', () => {
+    const code = `// @preeval
+export const a = 1, b = 2
+`
+    expect(analyzePreevalModule(code)).toBeNull()
+  })
+
+  it('finds multiple marks in one file with one joint closure', () => {
+    const code = `// @preeval
+export const a = 1
+// @preeval
+export const b = 'two'
+`
+    const plan = analyzePreevalModule(code)
+    expect(plan).not.toBeNull()
+    expect(plan!.targets.map((m) => m.name)).toEqual(['a', 'b'])
+    // single synthetic export list
+    expect(plan!.code.match(/export \{/g)?.length ?? 0).toBe(1)
+  })
+
+  it('rejects a marker with trailing text', () => {
+    const code = `// @preeval foo
+export const x = 1
+`
+    expect(analyzePreevalModule(code)).toBeNull()
+  })
+
+  it('rejects an intervening non-marker comment', () => {
+    const code = `// @preeval
+// helper comment
+export const x = 1
+`
+    expect(analyzePreevalModule(code)).toBeNull()
+  })
+
+  it('accepts type-only export lists (runtime const is still a target)', () => {
+    const code = `// @preeval
+const X = 1
+export type { X }
+`
+    const plan = analyzePreevalModule(code, 'mod.ts')
+    expect(plan).not.toBeNull()
+    expect(plan!.targets[0]?.name).toBe('X')
+  })
+
+  it('accepts runtime const with type-only export specifier', () => {
+    const code = `// @preeval
+const X = 1
+export { type X }
+`
+    const plan = analyzePreevalModule(code, 'mod.ts')
+    expect(plan).not.toBeNull()
+    expect(plan!.targets[0]?.name).toBe('X')
+  })
+
+  it('parses angle-bracket assertions in .ts files', () => {
+    const code = `// @preeval
+export const x = <number>1
+`
+    const plan = analyzePreevalModule(code, 'mod.ts')
+    expect(plan).not.toBeNull()
+    expect(plan!.targets[0]?.name).toBe('x')
+  })
+
+  it('extracts const → function → import closures and drops unused imports', () => {
+    const code = `import { base, unused } from './helper.js'
+import './side-effect.js'
+function addTwo(n) { return n + 2 }
+const mid = addTwo(base)
+// @preeval
+const answer = mid
+export { answer }
+`
+    const plan = analyzePreevalModule(code)
+    expect(plan).not.toBeNull()
+    expect(plan!.code).toContain("import { base } from './helper.js'")
+    expect(plan!.code).not.toContain('unused')
+    expect(plan!.code).not.toContain('side-effect')
+    expect(plan!.code).toContain('function addTwo')
+    expect(plan!.code).toContain('const mid')
+    expect(plan!.code).toContain('const answer')
+  })
+
+  it('does not pull type-only imports into the extracted module', () => {
+    const code = `import type { T } from './types.js'
+import { base } from './helper.js'
+// @preeval
+const answer: T = base + 2
+`
+    const plan = analyzePreevalModule(code, 'mod.ts')
+    expect(plan).not.toBeNull()
+    expect(plan!.code).not.toContain('types.js')
+    expect(plan!.code).toContain("import { base } from './helper.js'")
+  })
+
+  it('includes TS enums referenced by a target', () => {
+    const code = `enum E { A = 40 }
+// @preeval
+export const answer = E.A + 2
+`
+    const plan = analyzePreevalModule(code, 'mod.ts')
+    expect(plan).not.toBeNull()
+    expect(plan!.code).toContain('enum E')
+    expect(plan!.code).toContain('E.A + 2')
+  })
+
+  it('rejects let dependencies', () => {
+    const code = `let base = 40
+// @preeval
+const answer = base + 2
+`
+    expect(() => analyzePreevalModule(code)).toThrow(/let/)
+  })
+
+  it('rejects reassigned const dependencies', () => {
+    const code = `const base = 40
+base = 41
+// @preeval
+const answer = base + 2
+`
+    expect(() => analyzePreevalModule(code)).toThrow(/reassign/)
+  })
+
+  it('rejects intervening statements that touch the closure', () => {
+    const code = `const base = { n: 40 }
+base.n = 41
+// @preeval
+const answer = base.n
+`
+    expect(() => analyzePreevalModule(code)).toThrow(/closure binding/)
+  })
+
+  it('allows unrelated top-level throws outside the closure', () => {
+    const code = `throw new Error('must not execute')
+const base = 40
+// @preeval
+const local = base + 2
+export const answer = local
+`
+    const plan = analyzePreevalModule(code)
+    expect(plan).not.toBeNull()
+    expect(plan!.code).not.toContain('must not execute')
+    expect(plan!.code).toContain('const base = 40')
+    expect(plan!.code).toContain('const local = base + 2')
+  })
+})

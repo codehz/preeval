@@ -1,7 +1,7 @@
 import MagicString from 'magic-string'
 import type { Options } from '../types'
-import { detectMarkedExports } from './detect'
-import { evalModuleExports } from './eval'
+import { analyzePreevalModule, type EvaluationPlan } from './analyze'
+import { evalExtractedModule } from './eval'
 import { serializeJson } from './serialize'
 
 export interface TransformContext {
@@ -10,12 +10,13 @@ export interface TransformContext {
 }
 
 /**
- * Detect `// @preeval`-marked exported consts, evaluate the module once, and
- * replace each marked initializer with its serialized JSON value.
+ * Detect `// @preeval`-marked top-level consts, extract and evaluate their
+ * lexical dependency closure once, and replace each marked initializer with
+ * its serialized JSON value.
  *
  * Failure policy:
- * - Module eval failure fails every mark at once: strict → `ctx.error` +
- *   throw; otherwise `ctx.warn` and return null (no transform).
+ * - Analysis or module eval failure fails every mark at once: strict →
+ *   `ctx.error` + throw; otherwise `ctx.warn` and return null (no transform).
  * - Per-binding serialization failure: strict → `ctx.error` + throw;
  *   otherwise `ctx.warn` and skip that binding.
  */
@@ -28,19 +29,31 @@ export async function transformPreeval(
   // Strip ?query and #hash so the id is usable as a filesystem path.
   const cut = id.search(/[?#]/)
   const file = cut === -1 ? id : id.slice(0, cut)
-  const bindings = detectMarkedExports(code, file)
-  if (bindings.length === 0) return null
+
+  let plan: EvaluationPlan | null
+  try {
+    plan = analyzePreevalModule(code, file)
+  } catch (cause) {
+    const msg = `[preeval] ${file}: ${cause instanceof Error ? cause.message : String(cause)}`
+    if (options.strict) {
+      ctx.error(msg)
+      throw new Error(msg, { cause })
+    }
+    ctx.warn(msg)
+    return null
+  }
+  if (plan == null || plan.targets.length === 0) return null
 
   let values: Map<string, unknown>
   try {
-    values = await evalModuleExports(file, code, bindings, {
+    values = await evalExtractedModule(file, plan, {
       allowNode: options.allowNode,
     })
   } catch (cause) {
     const msg = `[preeval] ${cause instanceof Error ? cause.message : String(cause)}`
     if (options.strict) {
       ctx.error(msg)
-      throw new Error(msg)
+      throw new Error(msg, { cause })
     }
     ctx.warn(msg)
     return null
@@ -48,9 +61,9 @@ export async function transformPreeval(
 
   const s = new MagicString(code)
   let replaced = 0
-  for (const binding of bindings) {
-    if (!values.has(binding.name)) {
-      const msg = `[preeval] ${file}: export "${binding.exportName}" of marked const "${binding.name}" was not found on the evaluated module namespace`
+  for (const target of plan.targets) {
+    if (!values.has(target.name)) {
+      const msg = `[preeval] ${file}: marked const "${target.name}" was not found on the evaluated module namespace`
       if (options.strict) {
         ctx.error(msg)
         throw new Error(msg)
@@ -60,17 +73,17 @@ export async function transformPreeval(
     }
     let json: string
     try {
-      json = serializeJson(values.get(binding.name))
+      json = serializeJson(values.get(target.name))
     } catch (cause) {
-      const msg = `[preeval] ${file}: marked const "${binding.name}" is not JSON-superset (${cause instanceof Error ? cause.message : String(cause)})`
+      const msg = `[preeval] ${file}: marked const "${target.name}" is not JSON-superset (${cause instanceof Error ? cause.message : String(cause)})`
       if (options.strict) {
         ctx.error(msg)
-        throw new Error(msg)
+        throw new Error(msg, { cause })
       }
       ctx.warn(msg)
       continue
     }
-    s.overwrite(binding.initStart, binding.initEnd, json)
+    s.overwrite(target.initStart, target.initEnd, json)
     replaced++
   }
 

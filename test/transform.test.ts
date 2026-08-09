@@ -225,4 +225,98 @@ export const answer = 1 + 1
     expect(map.sourcesContent).toEqual([code])
     expect(warns).toEqual([])
   })
+
+  it('replaces a non-exported marked const', async () => {
+    const dir = tmpDir()
+    const entry = join(dir, 'entry.js')
+    const code = `// @preeval
+const local = 40 + 2
+export const answer = local
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(code, entry, {}, ctx)
+
+    expect(res).not.toBeNull()
+    expect(res!.code).toContain('const local = 42')
+    expect(res!.code).toContain('export const answer = local')
+    expect(warns).toEqual([])
+  })
+
+  it('does not execute unrelated top-level throws outside the closure', async () => {
+    const dir = tmpDir()
+    const entry = join(dir, 'entry.js')
+    const code = `throw new Error('must not execute')
+
+const base = 40
+
+// @preeval
+const local = base + 2
+
+export const answer = local
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(code, entry, {}, ctx)
+
+    expect(res).not.toBeNull()
+    expect(res!.code).toContain('const local = 42')
+    expect(res!.code).toContain("throw new Error('must not execute')")
+    expect(warns).toEqual([])
+  })
+
+  it('non-strict: analysis failure warns and returns null', async () => {
+    const dir = tmpDir()
+    const entry = join(dir, 'entry.js')
+    const code = `let base = 40
+// @preeval
+const answer = base + 2
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(code, entry, {}, ctx)
+
+    expect(res).toBeNull()
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toMatch(/let/)
+  })
+
+  it('strict: analysis failure errors and throws', async () => {
+    const dir = tmpDir()
+    const entry = join(dir, 'entry.js')
+    const code = `let base = 40
+// @preeval
+const answer = base + 2
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    await expect(transformPreeval(code, entry, { strict: true }, ctx)).rejects.toThrow(/let/)
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toMatch(/^ERR:/)
+  })
+
+  it('evaluates through local const and function deps', async () => {
+    const dir = tmpDir()
+    writeFileSync(join(dir, 'helper.js'), 'export const base = 40\n')
+    const entry = join(dir, 'entry.js')
+    const code = `import { base } from './helper.js'
+function addTwo(n) { return n + 2 }
+const mid = addTwo(base)
+// @preeval
+const answer = mid
+export { answer }
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(code, entry, {}, ctx)
+
+    expect(res).not.toBeNull()
+    expect(res!.code).toContain('const answer = 42')
+    expect(warns).toEqual([])
+  })
 })

@@ -1,7 +1,7 @@
 {
   "name": "@codehz/preeval",
   "version": "0.1.0",
-  "description": "Build-time pre-evaluation of // @preeval marked exported consts for library publish builds",
+  "description": "Build-time pre-evaluation of // @preeval marked top-level consts for library publish builds",
   "type": "module",
   "license": "MIT",
   "keywords": [
@@ -56,12 +56,16 @@
     }
   },
   "dependencies": {
-    "@babel/parser": "^7.28.0",
+    "@babel/generator": "^7",
+    "@babel/parser": "^7",
+    "@babel/traverse": "^7",
+    "@babel/types": "^7",
     "magic-string": "^0.30.21",
     "unplugin": "^3.3.0"
   },
   "devDependencies": {
     "@types/babel__generator": "^7.27.0",
+    "@types/babel__traverse": "^7.28.0",
     "@types/bun": "latest",
     "sucrase": "^3.35.1",
     "tsdown": "^0.22.14",

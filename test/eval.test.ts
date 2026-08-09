@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { evalModuleExports } from '../src/core/eval'
+import { analyzePreevalModule } from '../src/core/analyze'
+import { evalExtractedModule } from '../src/core/eval'
 
 const dirs: string[] = []
 
@@ -21,7 +22,7 @@ function tmpDir(): string {
 /** Force the Node prepare path (sucrase) even when the test runner is Bun. */
 const nodeRuntime = { isBun: false }
 
-describe('evalModuleExports (Node path)', () => {
+describe('evalExtractedModule (Node path)', () => {
   it('transpiles a .ts entry via sucrase and returns marked values', async () => {
     const dir = tmpDir()
     const entry = join(dir, 'entry.ts')
@@ -29,14 +30,9 @@ describe('evalModuleExports (Node path)', () => {
 export const answer: number = 40 + 2
 `
     writeFileSync(entry, code)
+    const plan = analyzePreevalModule(code, entry)!
 
-    const values = await evalModuleExports(
-      entry,
-      code,
-      [{ name: 'answer', exportName: 'answer', initStart: 0, initEnd: 0 }],
-      {},
-      nodeRuntime,
-    )
+    const values = await evalExtractedModule(entry, plan, {}, nodeRuntime)
 
     expect(values.get('answer')).toBe(42)
   })
@@ -49,14 +45,9 @@ export const answer: number = 40 + 2
 export const n: number = 1 + 1
 `
     writeFileSync(entry, code)
+    const plan = analyzePreevalModule(code, entry)!
 
-    const values = await evalModuleExports(
-      entry,
-      code,
-      [{ name: 'n', exportName: 'n', initStart: 0, initEnd: 0 }],
-      {},
-      nodeRuntime,
-    )
+    const values = await evalExtractedModule(entry, plan, {}, nodeRuntime)
 
     expect(values.get('n')).toBe(2)
   })
@@ -69,14 +60,9 @@ export const n: number = 1 + 1
 export const answer = E.A + 2
 `
     writeFileSync(entry, code)
+    const plan = analyzePreevalModule(code, entry)!
 
-    const values = await evalModuleExports(
-      entry,
-      code,
-      [{ name: 'answer', exportName: 'answer', initStart: 0, initEnd: 0 }],
-      {},
-      nodeRuntime,
-    )
+    const values = await evalExtractedModule(entry, plan, {}, nodeRuntime)
 
     expect(values.get('answer')).toBe(42)
   })
@@ -88,22 +74,16 @@ export const answer = E.A + 2
 export const answer = 20 * 2
 `
     writeFileSync(entry, code)
+    const plan = analyzePreevalModule(code, entry)!
 
-    const values = await evalModuleExports(
-      entry,
-      code,
-      [{ name: 'answer', exportName: 'answer', initStart: 0, initEnd: 0 }],
-      {},
-      nodeRuntime,
-    )
+    const values = await evalExtractedModule(entry, plan, {}, nodeRuntime)
 
     expect(values.get('answer')).toBe(40)
   })
 })
 
-describe('evalModuleExports (default runtime)', () => {
+describe('evalExtractedModule (default runtime)', () => {
   it('evaluates TS natively when Bun is present', async () => {
-    // This suite is run with Bun; skip if somehow not.
     if (typeof (globalThis as { Bun?: unknown }).Bun === 'undefined') {
       return
     }
@@ -113,14 +93,27 @@ describe('evalModuleExports (default runtime)', () => {
 export const answer: number = 10 + 1
 `
     writeFileSync(entry, code)
+    const plan = analyzePreevalModule(code, entry)!
 
-    const values = await evalModuleExports(
-      entry,
-      code,
-      [{ name: 'answer', exportName: 'answer', initStart: 0, initEnd: 0 }],
-      {},
-    )
+    const values = await evalExtractedModule(entry, plan, {})
 
     expect(values.get('answer')).toBe(11)
+  })
+
+  it('does not execute unrelated top-level side effects', async () => {
+    const dir = tmpDir()
+    const entry = join(dir, 'entry.js')
+    const code = `throw new Error('must not execute')
+const base = 40
+// @preeval
+const local = base + 2
+export const answer = local
+`
+    writeFileSync(entry, code)
+    const plan = analyzePreevalModule(code, entry)!
+
+    const values = await evalExtractedModule(entry, plan, {})
+
+    expect(values.get('local')).toBe(42)
   })
 })

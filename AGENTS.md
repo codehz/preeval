@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-`@codehz/preeval` is an **author-side publish-build plugin** that pre-evaluates `// @preeval`-marked top-level exported `const`s at build time and rewrites their initializers to JSON literals in `dist`. Consumers get plain data without installing this package.
+`@codehz/preeval` is an **author-side publish-build plugin** that pre-evaluates `// @preeval`-marked top-level `const`s at build time (exported or not) from their same-file lexical dependency closure and rewrites their initializers to JSON literals in `dist`. Consumers get plain data without installing this package.
 
 - Package: `@codehz/preeval` (ESM-only, MIT)
 - Hosts: Vite (library mode), Rollup, Bun.build via unplugin
@@ -16,9 +16,9 @@ Single pipeline, shared unplugin factory, thin bundler adapters.
 bundler (vite|rollup|bun)
   → unpluginFactory (src/index.ts)  // enforce: 'pre', filter id + code contains '@preeval'
     → transformPreeval (src/core/transform.ts)
-        1. detectMarkedExports  // Babel AST: // @preeval above exported const
-        2. evalModuleExports    // temp file next to source + dynamic import
-        3. serializeJson        // JSON-superset only
+        1. analyzePreevalModule  // Babel: marks + lexical closure + extracted ESM
+        2. evalExtractedModule   // temp file next to source + dynamic import
+        3. serializeJson         // JSON-superset only
         4. MagicString.overwrite(init spans) + sourcemap
 ```
 
@@ -27,24 +27,25 @@ bundler (vite|rollup|bun)
 | Public factory | `src/index.ts` | `unpluginFactory`, `preeval`, default export |
 | Adapters | `src/vite.ts`, `src/rollup.ts`, `src/bun.ts` | `create*Plugin(unpluginFactory)` one-liners |
 | Options | `src/types.ts` | `Options`: `strict`, `allowNode`, `include`, `exclude` |
-| Detect | `src/core/detect.ts` | `detectMarkedExports` → `MarkedBinding[]` |
-| Eval | `src/core/eval.ts` | `evalModuleExports` → `Map<localName, value>` |
+| Analyze | `src/core/analyze.ts` | `analyzePreevalModule` → `EvaluationPlan` |
+| Eval | `src/core/eval.ts` | `evalExtractedModule` → `Map<localName, value>` |
 | Serialize | `src/core/serialize.ts` | `isJsonValue` / `serializeJson` |
 | Orchestrate | `src/core/transform.ts` | `transformPreeval` + `TransformContext { warn, error }` |
 
-**Failure policy** (everywhere): `strict: true` → `ctx.error` + throw; default → `ctx.warn` + skip binding / return `null` for the module. Messages are prefixed `[preeval]`.
+**Failure policy** (everywhere): `strict: true` → `ctx.error` + throw; default → `ctx.warn` + skip binding / return `null` for the module. Messages are prefixed `[preeval]`. Analysis and eval failures are per-file; serialize failures are per-binding.
 
 **Eval notes**:
 - Temp file: `.preeval-<pid>-<time36>-<hex><ext>` written **next to** the source so relative imports resolve; always deleted in `finally`.
-- Bun: native TS/TSX; Node: optional peer `sucrase` transpiles **entry only** → `.mjs`.
+- Bun: native TS/TSX; Node: optional peer `sucrase` transpiles **extracted entry only** → `.mjs`.
 - `allowNode` is trust-only (currently a no-op via `void options.allowNode`); no sandbox.
 - Never use `eval()`; always dynamic `import()`.
+- Extracted module includes only the union lexical closure (used import specs, needed top-level const/function/class/enum) plus synthetic `export { name as __preeval_N }`.
 
 ## Key Directories
 
 ```
 src/           # library source (edit here)
-  core/        # detect / eval / serialize / transform
+  core/        # analyze / eval / serialize / transform
   index.ts     # unplugin factory + default export
   vite|rollup|bun.ts
 test/          # vitest; imports ../src/core/* directly (no dist)
@@ -69,14 +70,20 @@ There is no lint/format/coverage script. Typecheck is implicit via editor/tsdown
 ## Code Conventions & Common Patterns
 
 - **Language**: TypeScript, ESM (`"type": "module"`), `import type` required (`verbatimModuleSyntax`).
-- **Naming**: `camelCase` functions/vars; `PascalCase` types; core exports `verbNoun` (`detectMarkedExports`, `evalModuleExports`, `transformPreeval`).
-- **Async**: only at the eval/dynamic-import boundary; detect + serialize are sync.
+- **Naming**: `camelCase` functions/vars; `PascalCase` types; core exports `verbNoun` (`analyzePreevalModule`, `evalExtractedModule`, `transformPreeval`).
+- **Async**: only at the eval/dynamic-import boundary; analyze + serialize are sync.
 - **Errors**: wrap with `{ cause }`; user-facing strings start with `[preeval]`; dual-path strict vs warn.
 - **Context injection**: pass a minimal `TransformContext { warn, error }` — no DI container, no global state.
 - **Filters**: prefer named regex consts (`DEFAULT_INCLUDE`, `MARKER`, `TS_FILE`).
 - **Adapters**: keep bundler entry files as one-liner unplugin wrappers; put logic in `src/core/` or the factory.
 - **Strict TS**: `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`; unused-locals/params intentionally off.
-- **Marker rules** (do not loosen casually): line comment only, exact `@preeval` (trim whitespace), nearest comment above, top-level single-declarator exported `const`, no re-exports, value must be JSON-superset.
+- **Marker / scope rules** (do not loosen casually):
+  - line comment only, exact `@preeval` (trim whitespace), nearest comment above
+  - top-level single-declarator `const` with Identifier + initializer (export optional)
+  - stable deps only: import / const / function / class / enum
+  - refuse `let`/`var`, reassignment, and pre-target non-closure statements that touch the closure
+  - value must be JSON-superset
+  - no whole-module fallback when extraction cannot be proven
 
 ## Important Files
 
@@ -84,7 +91,7 @@ There is no lint/format/coverage script. Typecheck is implicit via editor/tsdown
 | --- | --- |
 | `src/index.ts` | Public unplugin factory, filters, transform hook |
 | `src/core/transform.ts` | Full pipeline + failure policy |
-| `src/core/detect.ts` | Marker / export detection contract |
+| `src/core/analyze.ts` | Marker detection, closure plan, extracted ESM |
 | `src/core/eval.ts` | Bun vs Node prep, sucrase peer, temp-file lifecycle |
 | `src/core/serialize.ts` | JSON-superset whitelist |
 | `src/types.ts` | Public `Options` |
@@ -102,7 +109,7 @@ There is no lint/format/coverage script. Typecheck is implicit via editor/tsdown
 | Build | **tsdown** (rolldown-based); ESM only, no CJS |
 | DTS | `resolver: 'tsc'`, `deps.dts.neverBundle: true`, `skipLibCheck` |
 | Plugin framework | **unplugin** v3 |
-| Parsing / rewrite | `@babel/parser`, `magic-string` |
+| Parsing / rewrite | `@babel/parser` + `@babel/traverse` + `@babel/generator` + `@babel/types`, `magic-string` |
 | Optional peer | `sucrase` ^3 (Node TS eval only) |
 
 Do not introduce CJS dual-package, webpack adapters, or sandboxed eval without an intentional design change.
@@ -112,8 +119,8 @@ Do not introduce CJS dual-package, webpack adapters, or sandboxed eval without a
 - **Framework**: Vitest 4, zero config (`test/*.test.ts` auto-discovered).
 - **Command**: `bun run test` → `vitest run`.
 - **Import style**: tests hit `../src/core/*` source; no build required.
-  - `test/detect.test.ts` — unit, inline source strings, span offsets
+  - `test/analyze.test.ts` — unit, marker + closure extraction
   - `test/serialize.test.ts` — `isJsonValue` / `serializeJson` accept/reject tables
   - `test/eval.test.ts` — Node-path force via `runtime.isBun: false` (sucrase); Bun default path
   - `test/transform.test.ts` — integration: real temp dirs, FS writes, dynamic imports; stub `TransformContext`
-- When changing detect/serialize/eval/transform contracts, extend the matching test file; keep failure-policy cases for both `strict` and default paths.
+- When changing analyze/serialize/eval/transform contracts, extend the matching test file; keep failure-policy cases for both `strict` and default paths.
