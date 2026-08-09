@@ -577,6 +577,118 @@ export function value(input) {
     expect(warns[0]).toMatch(/function-local binding "input"/)
   })
 
+  it('allows bindings declared inside callback arguments', async () => {
+    const dir = tmpDir()
+    writeFileSync(
+      join(dir, 'helper.js'),
+      `export const invoke = (callback, input) => callback(input)\n`,
+    )
+    const entry = join(dir, 'entry.js')
+    const code = `import { invoke } from './helper.js'
+const moduleStep = 2
+export const values = [
+  invoke((input) => input + 1, 2),
+  invoke((input) => input + moduleStep, 2),
+  invoke(function twice(input) {
+    const delta = 1
+    return input === 0 ? 0 : delta + twice(input - 1)
+  }, 2),
+  invoke(({ value = 0 }) => value + 1, {}),
+  invoke(() => {
+    try {
+      throw 5
+    } catch (error) {
+      return error
+    }
+  }, null),
+]
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(
+      code,
+      entry,
+      { imports: [{ from: './helper.js', import: 'invoke' }] },
+      ctx,
+    )
+
+    expect(res).not.toBeNull()
+    expect(res!.code).toMatch(/export const values = \[\s*3,\s*4,\s*2,\s*1,\s*5,?\s*\]/)
+    expect(res!.code).not.toContain("from './helper.js'")
+    expect(warns).toEqual([])
+  })
+
+  it('rejects callback captures declared outside the call argument', async () => {
+    const dir = tmpDir()
+    writeFileSync(
+      join(dir, 'helper.js'),
+      `export const invoke = (callback, input) => callback(input)\n`,
+    )
+    const entry = join(dir, 'entry.js')
+    const code = `import { invoke } from './helper.js'
+export function fromFunction() {
+  const step = 1
+  return invoke((input) => input + step, 2)
+}
+if (true) {
+  const step = 2
+  console.log(invoke((input) => input + step, 2))
+}
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(
+      code,
+      entry,
+      { imports: [{ from: './helper.js', import: 'invoke' }] },
+      ctx,
+    )
+
+    expect(res).toBeNull()
+    expect(warns).toHaveLength(2)
+    expect(warns.every((warning) => /function-local binding "step"/.test(warning))).toBe(true)
+  })
+
+  it('rejects special context dependencies inside callback arguments', async () => {
+    const dir = tmpDir()
+    writeFileSync(
+      join(dir, 'helper.js'),
+      `export const invoke = (callback) => callback()\n`,
+    )
+    const entry = join(dir, 'entry.js')
+    const code = `import { invoke } from './helper.js'
+export function contexts() {
+  invoke(() => this)
+  invoke(() => arguments[0])
+  invoke(function () { return new.target })
+  invoke(() => import.meta.url)
+}
+class Base { value = 1 }
+class Child extends Base {
+  read() { return invoke(() => super.value) }
+}
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(
+      code,
+      entry,
+      { imports: [{ from: './helper.js', import: 'invoke' }] },
+      ctx,
+    )
+
+    expect(res).toBeNull()
+    expect(warns).toHaveLength(5)
+    expect(warns.join('\n')).toMatch(/depend on this/)
+    expect(warns.join('\n')).toMatch(/depend on arguments/)
+    expect(warns.join('\n')).toMatch(/new\.target/)
+    expect(warns.join('\n')).toMatch(/import\.meta/)
+    expect(warns.join('\n')).toMatch(/depend on super/)
+  })
+
   it('recursively extracts stable module-level dependencies', async () => {
     const dir = tmpDir()
     writeFileSync(join(dir, 'helper.js'), `export const named = (x) => x\n`)
@@ -936,6 +1048,32 @@ export function value(input) {
     expect(res).toBeNull()
     expect(warns).toHaveLength(1)
     expect(warns[0]).toMatch(/function-local binding "input"/)
+  })
+
+  it('allows bindings declared inside tagged-template interpolations', async () => {
+    const dir = tmpDir()
+    writeFileSync(
+      join(dir, 'helper.js'),
+      `export const named = (strings, value) => strings[0] + value + strings[1]\n`,
+    )
+    const entry = join(dir, 'entry.js')
+    const code = `import { named } from './helper.js'
+export const value = named\`result:\${((input) => input + 1)(2)}\`
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(
+      code,
+      entry,
+      { imports: [{ from: './helper.js', import: 'named' }] },
+      ctx,
+    )
+
+    expect(res).not.toBeNull()
+    expect(res!.code).toContain('export const value = "result:3"')
+    expect(res!.code).not.toContain("from './helper.js'")
+    expect(warns).toEqual([])
   })
 
   it('evaluates nested tagged templates before outer calls', async () => {

@@ -920,8 +920,17 @@ function statementCoveredByClosure(stmt: Statement, closure: Set<string>): boole
 
   return false
 }
-function assertAutomaticCallDependencies(
-  exprPath: NodePath,
+function isBindingOwnedByPayload(binding: Binding, payloadPath: NodePath): boolean {
+  let path: NodePath | null = binding.path
+  while (path != null) {
+    if (path === payloadPath) return true
+    path = path.parentPath
+  }
+  return false
+}
+
+function assertAutomaticPayloadDependencies(
+  payloadPath: NodePath,
   programScope: Scope,
 ): void {
   const rejectLocal = (path: NodePath<t.Identifier>): void => {
@@ -930,31 +939,50 @@ function assertAutomaticCallDependencies(
       throw new Error('preeval: automatic call arguments cannot depend on arguments')
     }
     const binding = path.scope.getBinding(path.node.name)
-    if (binding != null && binding.scope !== programScope) {
+    if (
+      binding != null
+      && binding.scope !== programScope
+      && !isBindingOwnedByPayload(binding, payloadPath)
+    ) {
       throw new Error(
         `preeval: automatic call depends on function-local binding "${path.node.name}"`,
       )
     }
   }
 
-  exprPath.traverse({
+  const rejectSpecial = (path: NodePath): void => {
+    if (path.isThisExpression()) {
+      throw new Error('preeval: automatic call arguments cannot depend on this')
+    }
+    if (path.isSuper()) {
+      throw new Error('preeval: automatic call arguments cannot depend on super')
+    }
+    if (path.isMetaProperty()) {
+      const label = `${path.node.meta.name}.${path.node.property.name}`
+      if (label === 'import.meta' || label === 'new.target') {
+        throw new Error(`preeval: automatic call arguments cannot depend on ${label}`)
+      }
+    }
+  }
+
+  if (payloadPath.isIdentifier()) rejectLocal(payloadPath as NodePath<t.Identifier>)
+  rejectSpecial(payloadPath)
+
+  payloadPath.traverse({
     enter(path) {
       if (isPureTypeNode(path.node)) path.skip()
     },
     ReferencedIdentifier(path) {
       if (path.isIdentifier()) rejectLocal(path)
     },
-    ThisExpression() {
-      throw new Error('preeval: automatic call arguments cannot depend on this')
+    ThisExpression(path) {
+      rejectSpecial(path)
     },
-    Super() {
-      throw new Error('preeval: automatic call arguments cannot depend on super')
+    Super(path) {
+      rejectSpecial(path)
     },
     MetaProperty(path) {
-      const label = `${path.node.meta.name}.${path.node.property.name}`
-      if (label === 'import.meta' || label === 'new.target') {
-        throw new Error(`preeval: automatic call arguments cannot depend on ${label}`)
-      }
+      rejectSpecial(path)
     },
   })
 }
@@ -1181,9 +1209,9 @@ export function analyzeAutomaticPreevalCall(
   // Re-bind after traverse so control-flow narrowing survives the mutation above.
   const expressionPath: NodePath<t.CallExpression | t.TaggedTemplateExpression> = targetPath
   const callMatch: MatchedImportedCall = matched
-  assertAutomaticCallDependencies(expressionPath, programScope)
   const roots = new Set<string>()
   for (const payloadPath of automaticExpressionPayloadPaths(expressionPath)) {
+    assertAutomaticPayloadDependencies(payloadPath, programScope)
     for (const name of collectProgramFreeNames(payloadPath, programScope, localDecls)) {
       roots.add(name)
     }
