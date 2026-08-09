@@ -1,6 +1,6 @@
 # @codehz/preeval
 
-Build-time pre-evaluation of `// @preeval`-marked top-level `const`s. A publish-build plugin for library authors: marked initializers are evaluated once at build time from their lexical dependency closure and replaced with JSON literals in the emitted `dist`, so consumers get plain data in their bundle without installing this plugin.
+Build-time pre-evaluation of marked constants and selected statically imported ESM function calls. The plugin evaluates extractable expressions during an author-side publish build and replaces them with JSON-superset literals, so consumers receive plain data without this plugin or the removed function imports.
 
 ## Install
 
@@ -42,6 +42,35 @@ Rules:
 - Export is optional: `export const x`, `const x; export { x }`, and non-exported `const x` are all valid targets.
 - The value must be JSON-superset (see [Value domain](#value-domain)).
 
+## Configure imported functions
+
+Use `imports` to select functions by the exact source import specifier and ESM export name:
+
+```ts
+import preeval from '@codehz/preeval/vite'
+
+export default defineConfig({
+  plugins: [preeval({
+    imports: [
+      { from: 'message-compiler', import: 'compile' },
+      { from: 'default-package', import: 'default' },
+      {
+        from: 'runtime-package',
+        import: 'compile',
+        substitute: { from: 'pure-package', import: 'compilePure' },
+        onFailure: 'warn',
+      },
+    ],
+  })],
+})
+```
+
+Matching is binding-aware and supports named imports, default imports, aliases declared in the import, and static namespace properties (`ns.fn()` and `ns['fn']()`). It does not follow local aliases, re-exports/barrels, CommonJS `require`, dynamic imports, bundler-resolved IDs, or computed property expressions.
+
+Every matched syntactic call is a macro site: it runs once during the build even inside a function, loop, or dead control-flow branch. Arguments may use literals, ambient globals, imports, and stable module-level `const`/function/class/enum dependencies. Function parameters and function-local bindings, `let`/`var`, reassigned bindings, `this`, `arguments`, `super`, `new.target`, and `import.meta` are rejected.
+
+`substitute` changes only the callee imported by the temporary evaluation module. Original arguments are preserved, and emitted runtime code never imports or calls the substitute. Signature, export existence, equivalence, side effects, and purity are intentionally not checked.
+
 ## Usage
 
 The plugin only runs during your publish build (Vite library mode, Rollup, or Bun.build). It is a no-op for consumer builds, and consumers never need it.
@@ -78,19 +107,27 @@ await Bun.build({
 
 ## Options
 
-| Option      | Default              | Description                                                       |
-| ----------- | -------------------- | ----------------------------------------------------------------- |
-| `strict`    | `false`              | Fail the build on analysis/eval/serialize failure; default is warn + skip. |
-| `allowNode` | `false`              | Explicitly acknowledge the marked module may use Node/Bun APIs. Trust-only: nothing is injected and nothing is stripped — there is no sandbox. |
-| `include`   | `/\.[cm]?[jt]sx?$/`  | File-id filter passed to the bundler.                             |
-| `exclude`   | `/node_modules/`     | File-id filter passed to the bundler.                             |
+| Option      | Default              | Description |
+| ----------- | -------------------- | ----------- |
+| `onFailure` | `'warn'`             | Global `ignore \| warn \| error` policy for marked bindings and automatic calls. |
+| `imports`   | `[]`                 | Exact imported-function rules; each rule may override `onFailure` and define a build-time `substitute`. |
+| `allowNode` | `false`              | Trust acknowledgment for Node/Bun APIs. Nothing is injected or stripped; there is no sandbox. |
+| `include`   | `/\.[cm]?[jt]sx?$/`  | File-id filter passed to the bundler. |
+| `exclude`   | `/node_modules/`     | File-id filter passed to the bundler. |
 
-Only files whose source contains the literal marker string are ever inspected, and non-parseable files are ignored.
+When `imports` is empty, the plugin retains the marker-only source filter. When any automatic rule exists, every file passing `include`/`exclude` is inspected because substring filtering could miss aliased or namespace calls.
+
+`strict` was removed. Migrate `strict: true` to `onFailure: 'error'`; the old option is not accepted as a compatibility alias.
 
 ## Failure policy
 
-- Default (`strict: false`): analysis or evaluation failure emits a warning and the transform is skipped for that module; a marked binding whose value is not JSON-superset emits a warning and that binding is skipped.
-- `strict: true`: the same conditions raise a build error via the bundler's `error` hook and the build fails.
+- `ignore`: preserve the failed target and emit no diagnostic.
+- `warn` (default): preserve the failed target and emit a source-located warning.
+- `error`: report through the bundler error hook and abort the build.
+
+Rule-level `onFailure` overrides the global policy only for that automatic call. Configuration errors, including malformed policies, missing fields, and duplicate `(from, import)` rules, always throw when the plugin is created.
+
+Automatic calls run before marked bindings. If an automatic call inside a marked initializer fails under `ignore` or `warn`, that marked binding is skipped so marked evaluation cannot execute the original call and bypass its rule or substitute.
 
 ## Value domain
 
@@ -104,26 +141,26 @@ Rejected: `undefined`, `NaN`, `±Infinity`, `bigint`, functions, symbols, `Date`
 ## Requirements / caveats
 
 - Use it on the author-side publish build (tsup, Vite, Rollup, Bun.build) — not in consumer apps.
-- Evaluation runs only the **lexical dependency closure** of marked consts in the same file (imports, top-level `const`, function/class/enum declarations). Unrelated top-level statements and side-effect-only imports are not executed.
-- Local dependencies must be **stable bindings**: `import`, top-level `const`, function declaration, class declaration, or `enum`. `let`/`var`, reassignment, and intervening top-level mutations of the closure are rejected (warn/error per `strict`).
-- Cross-module: only the used import specifiers are kept; **imported modules still load fully** (no recursive project-graph trimming). Side-effect-only imports before a mark are refused when the closure still pulls value imports (they may mutate those modules).
-- Interference checks are **per remaining mark**: a statement between two marks is only checked against targets that appear after it. Never-called top-level function/class declarations are ignored unless a pre-target call site can reach them.
+- Evaluation extracts the same-file lexical dependency closure: imports and stable module-level `const`, function, class, and enum declarations. Unrelated top-level statements and side-effect-only imports are not executed.
+- Calls, constructors, getters, imported-module initialization, and other side effects inside the extracted closure are allowed. Configuring a rule is an explicit trust decision; there is no purity analysis or sandbox.
+- Only synchronous results are supported. Promise/thenable results are failures and are never implicitly awaited.
+- Imported modules load fully. There is no recursive project-graph trimming, persistent build cache, resolved-ID matching, or bundler-resolution emulation.
+- Successful automatic replacements remove their original import specifier only when the binding has no remaining runtime references. Other specifiers remain; namespace imports remain whole while any namespace reference survives. Type-only references do not retain runtime imports.
+- Automatic calls use macro semantics and execute in expression/source order. A successful marked initializer takes precedence over nested automatic edits.
+- Interference checks for marked bindings are per remaining mark. Never-called top-level function/class declarations are ignored unless a pre-target call site can reach them.
 - TypeScript:
   - **Bun**: evaluates TS/TSX natively (including relative `.ts` imports).
-  - **Node**: the plugin runs `sucrase` on the *extracted entry* only (optional `sucrase` peer). Relative TypeScript dependencies under Node need a host loader, or keep those deps as plain JS with explicit extensions.
-- Prefer one-shot publish builds. Dependency modules are cached by the host ESM loader for the process lifetime; watch-mode re-eval of graphs that import shared deps is not a v1 guarantee.
-- `allowNode` is an acknowledgment of trust, not isolation: extracted code runs as-is in the host runtime (Bun or Node during build) and can already use any host API. Static extraction shrinks the side-effect surface; it is not a sandbox.
-- Hidden shared state from imported modules or ambient globals is outside single-file static proof and remains a documentation boundary.
-- **Static-analysis limits** (not fully modeled; may produce wrong values without a refusal, or fail under `strict` when resolution cannot be proven):
-  - Dynamic code such as `eval(...)`, `new Function(...)`, and other string-driven execution that mutates closure state.
-  - Bundler-only resolution: virtual modules, path aliases, and package exports that Node/Bun cannot load from a temp file next to the source (default: warn + skip the module; `strict`: build error).
-  - `import.meta` inside a closure is refused (the eval temp path would leak).
-- No declaration-file (.d.ts) rewriting in v1 — annotated values are still typed as written in the source.
-- No first-class webpack support in v1.
+  - **Node**: the plugin runs `sucrase` on the extracted entry (optional `sucrase` peer). Relative TypeScript dependencies under Node need a host loader, or plain JS dependencies with explicit extensions.
+- Prefer one-shot publish builds. Imported dependency modules are cached by the host ESM loader for the process lifetime; watch-mode re-evaluation of shared graphs is not guaranteed.
+- `allowNode` is an acknowledgment of trust, not isolation: extracted code can already use host APIs.
+- Hidden shared state from imported modules or ambient globals remains outside single-file static proof.
+- Static-analysis limits include dynamic code such as `eval(...)`/`new Function(...)`, and bundler-only virtual modules, path aliases, or package mappings that the adjacent temporary file cannot load. Failures follow `onFailure`.
+- `import.meta` in an extracted closure is refused because the temporary path would leak.
+- No declaration-file rewriting or first-class webpack support.
 
 
 ## How it works
 
-1. **Analyze** — the source is parsed with Babel (TS grammar for `.ts`, TSX for `.tsx`); top-level `const`s whose nearest preceding comment is `// @preeval` are collected (single declarator only). Their same-file lexical dependency closure is planned; only stable bindings are accepted.
-2. **Extract + evaluate** — a minimal ESM module with the selected imports/declarations and synthetic exports is written next to the source (kept as TS on Bun; transpiled with `sucrase` to `.mjs` on Node when needed) and loaded with a dynamic `import`. The temp file is removed afterwards.
-3. **Replace** — each marked initializer's source span is overwritten with `JSON.stringify` of the evaluated value via magic-string, producing updated code plus a sourcemap.
+1. **Analyze** — Babel finds configured direct import calls and marked top-level constants, verifies binding identity, and builds their stable same-file dependency closures.
+2. **Extract + evaluate** — automatic calls execute first in source order; marked bindings then evaluate against successful intermediate constants. Minimal ESM files are written next to the source, dynamically imported, and removed in `finally`.
+3. **Serialize + replace** — JSON-superset results become literals through one non-overlapping MagicString edit set. Dead matched import bindings are removed without disturbing live specifiers.

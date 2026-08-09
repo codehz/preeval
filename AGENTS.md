@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-`@codehz/preeval` is an **author-side publish-build plugin** that pre-evaluates `// @preeval`-marked top-level `const`s at build time (exported or not) from their same-file lexical dependency closure and rewrites their initializers to JSON literals in `dist`. Consumers get plain data without installing this package.
+`@codehz/preeval` is an **author-side publish-build plugin** that pre-evaluates configured direct calls to statically imported ESM functions plus `// @preeval`-marked top-level `const`s. It evaluates same-file stable dependency closures and rewrites successful targets to JSON-superset literals. Consumers get plain data without installing this package.
 
 - Package: `@codehz/preeval` (ESM-only, MIT)
 - Hosts: Vite (library mode), Rollup, Bun.build via unplugin
@@ -14,32 +14,32 @@ Single pipeline, shared unplugin factory, thin bundler adapters.
 
 ```
 bundler (vite|rollup|bun)
-  → unpluginFactory (src/index.ts)  // enforce: 'pre', filter id + code contains '@preeval'
+  → unpluginFactory (src/index.ts)  // marker fast path unless automatic imports exist
     → transformPreeval (src/core/transform.ts)
-        1. analyzePreevalModule  // Babel: marks + lexical closure + extracted ESM
-        2. evalExtractedModule   // temp file next to source + dynamic import
-        3. serializeJson         // JSON-superset only
-        4. MagicString.overwrite(init spans) + sourcemap
+        1. find/analyze automatic imported calls
+        2. eval + serialize calls in macro order
+        3. analyze/eval marked bindings against intermediate constants
+        4. apply non-overlapping replacements + dead import cleanup
 ```
 
 | Layer | Path | Role |
 | --- | --- | --- |
 | Public factory | `src/index.ts` | `unpluginFactory`, `preeval`, default export |
 | Adapters | `src/vite.ts`, `src/rollup.ts`, `src/bun.ts` | `create*Plugin(unpluginFactory)` one-liners |
-| Options | `src/types.ts` | `Options`: `strict`, `allowNode`, `include`, `exclude` |
-| Analyze | `src/core/analyze.ts` | `analyzePreevalModule` → `EvaluationPlan` |
+| Options | `src/types.ts` | `Options`: `onFailure`, `imports`, `allowNode`, `include`, `exclude` |
+| Analyze | `src/core/analyze.ts` | call matching, dependency closures, evaluation plans, import cleanup plans |
 | Eval | `src/core/eval.ts` | `evalExtractedModule` → `Map<localName, value>` |
 | Serialize | `src/core/serialize.ts` | `isJsonValue` / `serializeJson` |
 | Orchestrate | `src/core/transform.ts` | `transformPreeval` + `TransformContext { warn, error }` |
 
-**Failure policy** (everywhere): `strict: true` → `ctx.error` + throw; default → `ctx.warn` + skip binding / return `null` for the module. Messages are prefixed `[preeval]`. Analysis and eval failures are per-file; serialize failures are per-binding.
+**Failure policy**: global `onFailure` defaults to `warn`; `ignore` preserves silently, `warn` preserves with diagnostics, and `error` aborts through `ctx.error`. Automatic rules may override the policy. Configuration errors always throw. `strict` was removed.
 
 **Eval notes**:
 - Temp file: `.preeval-<pid>-<time36>-<hex><ext>` written **next to** the source so relative imports resolve; always deleted in `finally`.
 - Bun: native TS/TSX; Node: optional peer `sucrase` transpiles **extracted entry only** → `.mjs`.
 - `allowNode` is trust-only (currently a no-op via `void options.allowNode`); no sandbox.
 - Never use `eval()`; always dynamic `import()`.
-- Extracted module includes only the union lexical closure (used import specs, needed top-level const/function/class/enum) plus synthetic `export { name as __preeval_N }`.
+- Extracted modules include only selected import specifiers, needed top-level const/function/class/enum declarations, synthetic targets, and optional build-time substitute imports.
 
 ## Key Directories
 
@@ -72,17 +72,18 @@ There is no lint/format/coverage script. Typecheck is implicit via editor/tsdown
 - **Language**: TypeScript, ESM (`"type": "module"`), `import type` required (`verbatimModuleSyntax`).
 - **Naming**: `camelCase` functions/vars; `PascalCase` types; core exports `verbNoun` (`analyzePreevalModule`, `evalExtractedModule`, `transformPreeval`).
 - **Async**: only at the eval/dynamic-import boundary; analyze + serialize are sync.
-- **Errors**: wrap with `{ cause }`; user-facing strings start with `[preeval]`; dual-path strict vs warn.
+- **Errors**: wrap with `{ cause }`; user-facing strings start with `[preeval]`; route failures through `ignore | warn | error`.
 - **Context injection**: pass a minimal `TransformContext { warn, error }` — no DI container, no global state.
 - **Filters**: prefer named regex consts (`DEFAULT_INCLUDE`, `MARKER`, `TS_FILE`).
 - **Adapters**: keep bundler entry files as one-liner unplugin wrappers; put logic in `src/core/` or the factory.
 - **Strict TS**: `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`; unused-locals/params intentionally off.
-- **Marker / scope rules** (do not loosen casually):
-  - line comment only, exact `@preeval` (trim whitespace), nearest comment above
-  - top-level single-declarator `const` with Identifier + initializer (export optional)
-  - stable deps only: import / const / function / class / enum
-  - refuse `let`/`var`, reassignment, and pre-target non-closure statements that touch the closure
-  - value must be JSON-superset
+- **Marker / automatic scope rules** (do not loosen casually):
+  - markers remain exact top-level single-declarator `const` comments
+  - automatic calls match exact source + export binding identity only
+  - direct named/default/import-alias calls and static namespace properties only
+  - stable module deps only: import / const / function / class / enum
+  - reject local bindings, `let`/`var`, reassignment, `this`/`arguments`/`super`, `new.target`, and `import.meta`
+  - synchronous JSON-superset results only; no sandbox or purity checking
   - no whole-module fallback when extraction cannot be proven
 
 ## Important Files
@@ -91,7 +92,7 @@ There is no lint/format/coverage script. Typecheck is implicit via editor/tsdown
 | --- | --- |
 | `src/index.ts` | Public unplugin factory, filters, transform hook |
 | `src/core/transform.ts` | Full pipeline + failure policy |
-| `src/core/analyze.ts` | Marker detection, closure plan, extracted ESM |
+| `src/core/analyze.ts` | Marker/call detection, closure plans, substitute extraction, import cleanup |
 | `src/core/eval.ts` | Bun vs Node prep, sucrase peer, temp-file lifecycle |
 | `src/core/serialize.ts` | JSON-superset whitelist |
 | `src/types.ts` | Public `Options` |
@@ -123,4 +124,5 @@ Do not introduce CJS dual-package, webpack adapters, or sandboxed eval without a
   - `test/serialize.test.ts` — `isJsonValue` / `serializeJson` accept/reject tables
   - `test/eval.test.ts` — Node-path force via `runtime.isBun: false` (sucrase); Bun default path
   - `test/transform.test.ts` — integration: real temp dirs, FS writes, dynamic imports; stub `TransformContext`
-- When changing analyze/serialize/eval/transform contracts, extend the matching test file; keep failure-policy cases for both `strict` and default paths.
+  - `test/index.test.ts` — option validation and marker/automatic filter selection
+- When changing analyze/serialize/eval/transform contracts, extend the matching test file; cover all three failure policies where behavior differs.

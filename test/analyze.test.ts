@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { analyzePreevalModule } from '../src/core/analyze'
+import { analyzePreevalModule, findAutomaticPreevalCalls } from '../src/core/analyze'
 
 /** Resolve the exact init span of `expr` inside `code`. */
 function spanOf(code: string, expr: string): { initStart: number; initEnd: number } {
@@ -338,5 +338,47 @@ const answer = import.meta.url
 const answer = where()
 `
     expect(() => analyzePreevalModule(code)).toThrow(/import\.meta/)
+  })
+})
+
+describe('findAutomaticPreevalCalls', () => {
+  it('matches exact static ESM bindings and aliases', () => {
+    const code = `import def from 'pkg'
+import { fn, fn as alias } from 'pkg'
+import * as ns from 'pkg'
+def()
+fn()
+alias()
+ns.fn()
+ns['fn']()
+`
+    const calls = findAutomaticPreevalCalls(code, [
+      { from: 'pkg', import: 'default' },
+      { from: 'pkg', import: 'fn' },
+    ])
+    expect(calls).toHaveLength(5)
+    expect(calls.map((call) => call.rule.import)).toEqual([
+      'default',
+      'fn',
+      'fn',
+      'fn',
+      'fn',
+    ])
+  })
+
+  it('does not follow local aliases or unsupported module forms', () => {
+    const code = `import { fn } from 'pkg'
+const local = fn
+local()
+const required = require('pkg')
+required.fn()
+import('pkg').then((mod) => mod.fn())
+`
+    expect(findAutomaticPreevalCalls(code, [{ from: 'pkg', import: 'fn' }])).toEqual([])
+  })
+
+  it('matches source specifiers exactly and does not follow barrels', () => {
+    const code = `import { fn } from './barrel.js'\nfn()\n`
+    expect(findAutomaticPreevalCalls(code, [{ from: './impl.js', import: 'fn' }])).toEqual([])
   })
 })

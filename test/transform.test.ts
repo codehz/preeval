@@ -109,7 +109,7 @@ export const answer = base + 2
     expect(warns).toEqual([])
   })
 
-  it('non-strict: non-JSON value warns and skips the binding', async () => {
+  it('warn policy: non-JSON value warns and skips the binding', async () => {
     const dir = tmpDir()
     const entry = join(dir, 'entry.js')
     const code = `// @preeval
@@ -125,7 +125,7 @@ export const bad = new Date(0)
     expect(warns[0]).toMatch(/not JSON-superset/)
   })
 
-  it('non-strict: skips the failing binding but keeps replacing others', async () => {
+  it('warn policy: skips the failing binding but keeps replacing others', async () => {
     const dir = tmpDir()
     const entry = join(dir, 'entry.js')
     const code = `// @preeval
@@ -145,7 +145,7 @@ export const bad = undefined
     expect(warns[0]).toMatch(/not JSON-superset/)
   })
 
-  it('strict: non-JSON value errors and throws', async () => {
+  it('error policy: non-JSON value errors and throws', async () => {
     const dir = tmpDir()
     const entry = join(dir, 'entry.js')
     const code = `// @preeval
@@ -154,14 +154,14 @@ export const bad = new Date(0)
     writeFileSync(entry, code)
     const { ctx, warns } = makeCtx()
 
-    await expect(transformPreeval(code, entry, { strict: true }, ctx)).rejects.toThrow(
+    await expect(transformPreeval(code, entry, { onFailure: 'error' }, ctx)).rejects.toThrow(
       /not JSON-superset/,
     )
     expect(warns).toHaveLength(1)
     expect(warns[0]).toMatch(/^ERR:/)
   })
 
-  it('non-strict: module eval failure warns and returns null', async () => {
+  it('warn policy: module eval failure warns and returns null', async () => {
     const dir = tmpDir()
     const entry = join(dir, 'entry.js')
     const code = `// @preeval
@@ -178,7 +178,7 @@ export const x = (() => { throw new Error('boom') })()
     expect(warns[0]).toContain('boom')
   })
 
-  it('strict: module eval failure errors and throws', async () => {
+  it('error policy: module eval failure errors and throws', async () => {
     const dir = tmpDir()
     const entry = join(dir, 'entry.js')
     const code = `// @preeval
@@ -187,7 +187,7 @@ export const x = (() => { throw new Error('boom') })()
     writeFileSync(entry, code)
     const { ctx, warns } = makeCtx()
 
-    await expect(transformPreeval(code, entry, { strict: true }, ctx)).rejects.toThrow(
+    await expect(transformPreeval(code, entry, { onFailure: 'error' }, ctx)).rejects.toThrow(
       /Failed to evaluate/,
     )
     expect(warns).toHaveLength(1)
@@ -267,7 +267,7 @@ export const answer = local
     expect(warns).toEqual([])
   })
 
-  it('non-strict: analysis failure warns and returns null', async () => {
+  it('warn policy: analysis failure warns and returns null', async () => {
     const dir = tmpDir()
     const entry = join(dir, 'entry.js')
     const code = `let base = 40
@@ -284,7 +284,7 @@ const answer = base + 2
     expect(warns[0]).toMatch(/let/)
   })
 
-  it('strict: analysis failure errors and throws', async () => {
+  it('error policy: analysis failure errors and throws', async () => {
     const dir = tmpDir()
     const entry = join(dir, 'entry.js')
     const code = `let base = 40
@@ -294,7 +294,7 @@ const answer = base + 2
     writeFileSync(entry, code)
     const { ctx, warns } = makeCtx()
 
-    await expect(transformPreeval(code, entry, { strict: true }, ctx)).rejects.toThrow(/let/)
+    await expect(transformPreeval(code, entry, { onFailure: 'error' }, ctx)).rejects.toThrow(/let/)
     expect(warns).toHaveLength(1)
     expect(warns[0]).toMatch(/^ERR:/)
   })
@@ -320,7 +320,7 @@ export { answer }
     expect(warns).toEqual([])
   })
 
-  it('non-strict: side-effect import before target warns and skips module', async () => {
+  it('warn policy: side-effect import before target warns and skips module', async () => {
     const dir = tmpDir()
     writeFileSync(join(dir, 'helper.js'), 'export const base = 1\n')
     writeFileSync(join(dir, 'mutate.js'), 'import { base as b } from "./helper.js"; void b\n')
@@ -341,7 +341,7 @@ export { answer }
     expect(warns[0]).toMatch(/side-effect import/)
   })
 
-  it('strict: side-effect import before target errors and throws', async () => {
+  it('error policy: side-effect import before target errors and throws', async () => {
     const dir = tmpDir()
     writeFileSync(join(dir, 'helper.js'), 'export const base = 1\n')
     writeFileSync(join(dir, 'mutate.js'), 'export {}\n')
@@ -355,7 +355,7 @@ export { answer }
     writeFileSync(entry, code)
     const { ctx, warns } = makeCtx()
 
-    await expect(transformPreeval(code, entry, { strict: true }, ctx)).rejects.toThrow(
+    await expect(transformPreeval(code, entry, { onFailure: 'error' }, ctx)).rejects.toThrow(
       /side-effect import/,
     )
     expect(warns).toHaveLength(1)
@@ -381,7 +381,7 @@ export { answer }
     expect(warns).toEqual([])
   })
 
-  it('non-strict: reachable hoisted post-target mutator warns and skips module', async () => {
+  it('warn policy: reachable hoisted post-target mutator warns and skips module', async () => {
     const dir = tmpDir()
     const entry = join(dir, 'entry.js')
     const code = `const obj = { n: 1 }
@@ -401,7 +401,7 @@ function bump() { obj.n = 2 }
     expect(warns[0]).toMatch(/hoisted declaration|closure binding/)
   })
 
-  it('strict: reachable hoisted post-target mutator errors and throws', async () => {
+  it('error policy: reachable hoisted post-target mutator errors and throws', async () => {
     const dir = tmpDir()
     const entry = join(dir, 'entry.js')
     const code = `const obj = { n: 1 }
@@ -414,7 +414,7 @@ function bump() { obj.n = 2 }
     writeFileSync(entry, code)
     const { ctx, warns } = makeCtx()
 
-    await expect(transformPreeval(code, entry, { strict: true }, ctx)).rejects.toThrow(
+    await expect(transformPreeval(code, entry, { onFailure: 'error' }, ctx)).rejects.toThrow(
       /hoisted declaration|closure binding/,
     )
     expect(warns).toHaveLength(1)
@@ -462,7 +462,7 @@ export { answer }
     expect(warns).toEqual([])
   })
 
-  it('non-strict: import.meta in target warns and skips module', async () => {
+  it('warn policy: import.meta in target warns and skips module', async () => {
     const dir = tmpDir()
     const entry = join(dir, 'entry.js')
     const code = `// @preeval
@@ -479,7 +479,7 @@ export { answer }
     expect(warns[0]).toMatch(/import\.meta/)
   })
 
-  it('strict: import.meta in target errors and throws', async () => {
+  it('error policy: import.meta in target errors and throws', async () => {
     const dir = tmpDir()
     const entry = join(dir, 'entry.js')
     const code = `// @preeval
@@ -489,8 +489,368 @@ export { answer }
     writeFileSync(entry, code)
     const { ctx, warns } = makeCtx()
 
-    await expect(transformPreeval(code, entry, { strict: true }, ctx)).rejects.toThrow(/import\.meta/)
+    await expect(transformPreeval(code, entry, { onFailure: 'error' }, ctx)).rejects.toThrow(/import\.meta/)
     expect(warns).toHaveLength(1)
     expect(warns[0]).toMatch(/^ERR:/)
+  })
+})
+
+describe('automatic imported calls', () => {
+  const rulesFor = (from: string) => [
+    { from, import: 'default' },
+    { from, import: 'named' },
+  ]
+
+  it('matches named/default aliases and namespace static properties', async () => {
+    const dir = tmpDir()
+    writeFileSync(
+      join(dir, 'helper.js'),
+      `export default (x) => 'd' + x\nexport const named = (x) => 'n' + x\n`,
+    )
+    const entry = join(dir, 'entry.js')
+    const code = `import def from './helper.js'
+import { named, named as alias } from './helper.js'
+import * as ns from './helper.js'
+export const values = [def(1), named(2), alias(3), ns.named(4), ns['named'](5)]
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(code, entry, { imports: rulesFor('./helper.js') }, ctx)
+
+    expect(res).not.toBeNull()
+    expect(res!.code).toContain(`export const values = ["d1", "n2", "n3", "n4", "n5"]`)
+    expect(res!.code).not.toContain("from './helper.js'")
+    expect(warns).toEqual([])
+  })
+
+  it('does not follow local aliases and preserves their import', async () => {
+    const dir = tmpDir()
+    writeFileSync(join(dir, 'helper.js'), `export const named = (x) => x + 1\n`)
+    const entry = join(dir, 'entry.js')
+    const code = `import { named } from './helper.js'
+export const direct = named(1)
+const local = named
+export const indirect = local(2)
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(
+      code,
+      entry,
+      { imports: [{ from: './helper.js', import: 'named' }] },
+      ctx,
+    )
+
+    expect(res!.code).toContain('export const direct = 2')
+    expect(res!.code).toContain('export const indirect = local(2)')
+    expect(res!.code).toContain("import { named } from './helper.js'")
+    expect(warns).toEqual([])
+  })
+
+  it('evaluates calls in arbitrary scopes but rejects function-local arguments', async () => {
+    const dir = tmpDir()
+    writeFileSync(join(dir, 'helper.js'), `export const named = (x) => x + 2\n`)
+    const entry = join(dir, 'entry.js')
+    const code = `import { named } from './helper.js'
+const base = 40
+export function value(input) {
+  if (false) return named(base)
+  return named(input)
+}
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(
+      code,
+      entry,
+      { imports: [{ from: './helper.js', import: 'named' }] },
+      ctx,
+    )
+
+    expect(res!.code).toContain('if (false) return 42')
+    expect(res!.code).toContain('return named(input)')
+    expect(res!.code).toContain("import { named } from './helper.js'")
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toMatch(/function-local binding "input"/)
+  })
+
+  it('recursively extracts stable module-level dependencies', async () => {
+    const dir = tmpDir()
+    writeFileSync(join(dir, 'helper.js'), `export const named = (x) => x\n`)
+    const entry = join(dir, 'entry.js')
+    const code = `import { named } from './helper.js'
+const base = 40
+function addTwo(value) { return value + 2 }
+const derived = addTwo(base)
+export const value = named(derived)
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(
+      code,
+      entry,
+      { imports: [{ from: './helper.js', import: 'named' }] },
+      ctx,
+    )
+
+    expect(res!.code).toContain('export const value = 42')
+    expect(res!.code).not.toContain("from './helper.js'")
+    expect(warns).toEqual([])
+  })
+
+  it('rejects let, this, arguments, super, and new.target dependencies', async () => {
+    const dir = tmpDir()
+    writeFileSync(join(dir, 'helper.js'), `export const named = (x) => x\n`)
+    const entry = join(dir, 'entry.js')
+    const code = `import { named } from './helper.js'
+let mutable = 1
+export const a = named(mutable)
+export function fromThis() { return named(this) }
+export function fromArguments() { return named(arguments[0]) }
+export function fromNewTarget() { return named(new.target) }
+class Base { value = 1 }
+class Child extends Base { read() { return named(super.value) } }
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(
+      code,
+      entry,
+      { imports: [{ from: './helper.js', import: 'named' }] },
+      ctx,
+    )
+
+    expect(res).toBeNull()
+    expect(warns).toHaveLength(5)
+    expect(warns.join('\n')).toMatch(/declared with let/)
+    expect(warns.join('\n')).toMatch(/depend on this/)
+    expect(warns.join('\n')).toMatch(/depend on arguments/)
+    expect(warns.join('\n')).toMatch(/depend on super/)
+    expect(warns.join('\n')).toMatch(/new\.target/)
+  })
+
+  it('uses substitutes only in the temporary evaluation module', async () => {
+    const dir = tmpDir()
+    writeFileSync(join(dir, 'runtime.js'), `throw new Error('runtime module initialized')\nexport const compile = () => 0\n`)
+    writeFileSync(join(dir, 'pure.js'), `export const compilePure = (x) => ({ value: x })\n`)
+    const entry = join(dir, 'entry.js')
+    const code = `import { compile } from './runtime.js'
+export const output = compile('ok')
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(code, entry, {
+      imports: [{
+        from: './runtime.js',
+        import: 'compile',
+        substitute: { from: './pure.js', import: 'compilePure' },
+      }],
+    }, ctx)
+
+    expect(res!.code).toContain('export const output = {"value":"ok"}')
+    expect(res!.code).not.toContain('runtime.js')
+    expect(res!.code).not.toContain('pure.js')
+    expect(warns).toEqual([])
+  })
+
+  it('rejects Promise results without awaiting them', async () => {
+    const dir = tmpDir()
+    writeFileSync(join(dir, 'helper.js'), `export const named = async () => 42\n`)
+    const entry = join(dir, 'entry.js')
+    const code = `import { named } from './helper.js'
+export const output = named()
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(
+      code,
+      entry,
+      { imports: [{ from: './helper.js', import: 'named' }] },
+      ctx,
+    )
+
+    expect(res).toBeNull()
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toMatch(/Promise\/thenable/)
+  })
+
+  it('isolates call and serialization failures', async () => {
+    const dir = tmpDir()
+    writeFileSync(
+      join(dir, 'helper.js'),
+      `export const good = () => 42\nexport const boom = () => { throw new Error('boom') }\nexport const bad = () => undefined\n`,
+    )
+    const entry = join(dir, 'entry.js')
+    const code = `import { good, boom, bad } from './helper.js'
+export const values = [good(), boom(), bad()]
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(code, entry, {
+      imports: ['good', 'boom', 'bad'].map((name) => ({ from: './helper.js', import: name })),
+    }, ctx)
+
+    expect(res!.code).toContain('export const values = [42, boom(), bad()]')
+    expect(res!.code).toContain('boom')
+    expect(res!.code).toContain('bad')
+    expect(res!.code).not.toMatch(/import \{[^}]*good/)
+    expect(warns).toHaveLength(2)
+    expect(warns[0]).toContain('boom')
+    expect(warns[1]).toContain('not JSON-superset')
+  })
+
+  it('applies global and per-rule failure policies', async () => {
+    const dir = tmpDir()
+    writeFileSync(join(dir, 'helper.js'), `export const boom = () => { throw new Error('boom') }\n`)
+    const entry = join(dir, 'entry.js')
+    const code = `import { boom } from './helper.js'\nexport const value = boom()\n`
+    writeFileSync(entry, code)
+
+    const ignored = makeCtx()
+    expect(await transformPreeval(code, entry, {
+      onFailure: 'ignore',
+      imports: [{ from: './helper.js', import: 'boom' }],
+    }, ignored.ctx)).toBeNull()
+    expect(ignored.warns).toEqual([])
+
+    const overridden = makeCtx()
+    expect(await transformPreeval(code, entry, {
+      onFailure: 'ignore',
+      imports: [{ from: './helper.js', import: 'boom', onFailure: 'warn' }],
+    }, overridden.ctx)).toBeNull()
+    expect(overridden.warns).toHaveLength(1)
+
+    const errored = makeCtx()
+    await expect(transformPreeval(code, entry, {
+      onFailure: 'error',
+      imports: [{ from: './helper.js', import: 'boom' }],
+    }, errored.ctx)).rejects.toThrow(/boom/)
+    expect(errored.warns[0]).toMatch(/^ERR:/)
+  })
+
+  it('evaluates nested automatic calls once in JavaScript order', async () => {
+    const dir = tmpDir()
+    writeFileSync(
+      join(dir, 'helper.js'),
+      `let count = 0\nexport const inner = () => ++count\nexport const outer = (x) => x * 10 + ++count\n`,
+    )
+    const entry = join(dir, 'entry.js')
+    const code = `import { inner, outer } from './helper.js'\nexport const value = outer(inner())\n`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(code, entry, {
+      imports: [
+        { from: './helper.js', import: 'inner' },
+        { from: './helper.js', import: 'outer' },
+      ],
+    }, ctx)
+
+    expect(res!.code).toContain('export const value = 12')
+    expect(res!.code).not.toContain('helper.js')
+    expect(warns).toEqual([])
+  })
+
+  it('lets a successful marked initializer override nested call edits', async () => {
+    const dir = tmpDir()
+    writeFileSync(join(dir, 'helper.js'), `export const named = (x) => x + 1\n`)
+    const entry = join(dir, 'entry.js')
+    const code = `import { named } from './helper.js'
+const wrap = (x) => x * 2
+// @preeval
+export const value = wrap(named(1))
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(
+      code,
+      entry,
+      { imports: [{ from: './helper.js', import: 'named' }] },
+      ctx,
+    )
+
+    expect(res!.code).toContain('export const value = 4')
+    expect(res!.code).not.toContain('helper.js')
+    expect(warns).toEqual([])
+  })
+
+  it('skips a marked initializer when its automatic call fails', async () => {
+    const dir = tmpDir()
+    writeFileSync(join(dir, 'helper.js'), `export const boom = () => { throw new Error('boom') }\n`)
+    const entry = join(dir, 'entry.js')
+    const code = `import { boom } from './helper.js'
+const wrap = (x) => x
+// @preeval
+export const value = wrap(boom())
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(
+      code,
+      entry,
+      { imports: [{ from: './helper.js', import: 'boom' }] },
+      ctx,
+    )
+
+    expect(res).toBeNull()
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toContain('boom')
+  })
+
+  it('preserves namespace imports with remaining runtime references', async () => {
+    const dir = tmpDir()
+    writeFileSync(join(dir, 'helper.js'), `export const named = () => 1\nexport const other = 2\n`)
+    const entry = join(dir, 'entry.js')
+    const code = `import * as ns from './helper.js'
+export const value = ns.named()
+console.log(ns.other)
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(
+      code,
+      entry,
+      { imports: [{ from: './helper.js', import: 'named' }] },
+      ctx,
+    )
+
+    expect(res!.code).toContain('export const value = 1')
+    expect(res!.code).toContain("import * as ns from './helper.js'")
+    expect(warns).toEqual([])
+  })
+
+  it('ignores type-only references during runtime import cleanup', async () => {
+    const dir = tmpDir()
+    writeFileSync(join(dir, 'helper.js'), `export const named = () => 1\n`)
+    const entry = join(dir, 'entry.ts')
+    const code = `import { named } from './helper.js'
+type Named = typeof named
+export const value = named()
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(
+      code,
+      entry,
+      { imports: [{ from: './helper.js', import: 'named' }] },
+      ctx,
+    )
+
+    expect(res!.code).toContain('type Named = typeof named')
+    expect(res!.code).not.toContain("from './helper.js'")
+    expect(res!.code).toContain('export const value = 1')
+    expect(warns).toEqual([])
   })
 })

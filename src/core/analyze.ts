@@ -9,16 +9,17 @@ import type {
   Statement,
   VariableDeclaration,
 } from '@babel/types'
+import type { ImportedFunctionRule } from '../types'
 
 // CJS interop: Bun/Node may surface either the function or `{ default: fn }`.
 const generate = (generateMod as unknown as { default?: typeof generateMod }).default ?? generateMod
 const traverse = (traverseMod as unknown as { default?: typeof traverseMod }).default ?? traverseMod
 
-/** One marked top-level const to pre-evaluate. */
+/** One value exported from a temporary evaluation module. */
 export interface PreevalTarget {
-  /** Local binding name in the original module. */
+  /** Local binding name in the extracted module. */
   name: string
-  /** Original initializer span in the source string. */
+  /** Original initializer/expression span in the analyzed source string. */
   initStart: number
   initEnd: number
   /** Synthetic export name used in the extracted eval module. */
@@ -30,6 +31,24 @@ export interface EvaluationPlan {
   /** Minimal ESM source that evaluates the union lexical closure. */
   code: string
   targets: PreevalTarget[]
+}
+
+/** Lightweight marked-binding metadata, before dependency validation. */
+export interface MarkedBindingTarget {
+  name: string
+  initStart: number
+  initEnd: number
+}
+
+/** One direct call matched to a configured static ESM import. */
+export interface AutomaticCallTarget {
+  start: number
+  end: number
+  line: number
+  column: number
+  rule: ImportedFunctionRule
+  bindingName: string
+  containingMarkedName?: string
 }
 
 const MARKER = '@preeval'
@@ -72,6 +91,33 @@ function pluginsForFilename(filename?: string): ParserPlugin[] {
     return ['typescript']
   }
   return ['typescript']
+}
+
+function parseModule(code: string, filename?: string): File | null {
+  try {
+    return parse(code, {
+      sourceType: 'module',
+      sourceFilename: filename,
+      plugins: pluginsForFilename(filename),
+      attachComment: true,
+    })
+  } catch {
+    return null
+  }
+}
+
+function resolveProgramPath(file: File): NodePath<t.Program> {
+  let programPath: NodePath<t.Program> | null = null
+  traverse(file, {
+    Program(path) {
+      programPath = path
+      path.stop()
+    },
+  })
+  if (programPath == null) {
+    throw new Error('preeval: failed to resolve program scope')
+  }
+  return programPath
 }
 
 /**
@@ -117,6 +163,41 @@ function asConstDeclaration(stmt: Statement): VariableDeclaration | null {
   const inner = unwrapExport(stmt)
   if (inner.type === 'VariableDeclaration' && inner.kind === 'const') return inner
   return null
+}
+
+interface RawMarkedTarget extends MarkedBindingTarget {
+  stmt: Statement
+}
+
+function collectMarkedTargets(code: string, file: File): RawMarkedTarget[] {
+  const targets: RawMarkedTarget[] = []
+  for (const stmt of file.program.body) {
+    const decl = asConstDeclaration(stmt)
+    if (decl == null || decl.declarations.length !== 1) continue
+    const d = decl.declarations[0]
+    if (d === undefined || d.id.type !== 'Identifier' || d.init == null) continue
+    if (!isMarked(code, file, stmt)) continue
+    targets.push({
+      name: d.id.name,
+      initStart: assertNumber(d.init.start, 'initializer start'),
+      initEnd: assertNumber(d.init.end, 'initializer end'),
+      stmt,
+    })
+  }
+  return targets
+}
+
+export function findMarkedPreevalTargets(
+  code: string,
+  filename?: string,
+): MarkedBindingTarget[] {
+  const file = parseModule(code, filename)
+  if (file == null) return []
+  return collectMarkedTargets(code, file).map(({ name, initStart, initEnd }) => ({
+    name,
+    initStart,
+    initEnd,
+  }))
 }
 
 /** Pure type-system nodes: traverse should skip (no runtime free refs). */
@@ -196,7 +277,7 @@ function collectProgramFreeNames(
       if (isPureTypeNode(path.node)) path.skip()
     },
     ReferencedIdentifier(path) {
-      consider(path)
+      if (path.isIdentifier()) consider(path)
     },
   })
   return names
@@ -214,6 +295,112 @@ function isTypeOnlyImportSpec(
   return spec.type === 'ImportSpecifier' && spec.importKind === 'type'
 }
 
+interface MatchedImportedCall {
+  rule: ImportedFunctionRule
+  localName: string
+}
+
+function importedExportName(
+  spec: t.ImportSpecifier | t.ImportDefaultSpecifier,
+): string {
+  if (spec.type === 'ImportDefaultSpecifier') return 'default'
+  return spec.imported.type === 'Identifier' ? spec.imported.name : spec.imported.value
+}
+
+function staticMemberName(member: t.MemberExpression): string | null {
+  if (!member.computed && member.property.type === 'Identifier') {
+    return member.property.name
+  }
+  if (member.computed && member.property.type === 'StringLiteral') {
+    return member.property.value
+  }
+  return null
+}
+
+function matchImportedCall(
+  path: NodePath<t.CallExpression>,
+  rules: readonly ImportedFunctionRule[],
+): MatchedImportedCall | null {
+  const callee = path.node.callee
+  let localName: string
+  let exportName: string
+  let requireNamespace = false
+
+  if (callee.type === 'Identifier') {
+    localName = callee.name
+  } else if (callee.type === 'MemberExpression' && callee.object.type === 'Identifier') {
+    const memberName = staticMemberName(callee)
+    if (memberName == null) return null
+    localName = callee.object.name
+    exportName = memberName
+    requireNamespace = true
+  } else {
+    return null
+  }
+
+  const binding = path.scope.getBinding(localName)
+  if (binding == null) return null
+  const spec = binding.path.node
+  if (
+    spec.type !== 'ImportSpecifier'
+    && spec.type !== 'ImportDefaultSpecifier'
+    && spec.type !== 'ImportNamespaceSpecifier'
+  ) {
+    return null
+  }
+  const decl = binding.path.parentPath?.node
+  if (decl?.type !== 'ImportDeclaration' || isTypeOnlyImportSpec(decl, spec)) return null
+
+  if (requireNamespace) {
+    if (spec.type !== 'ImportNamespaceSpecifier') return null
+  } else {
+    if (spec.type === 'ImportNamespaceSpecifier') return null
+    exportName = importedExportName(spec)
+  }
+
+  const rule = rules.find(
+    (candidate) => candidate.from === decl.source.value && candidate.import === exportName,
+  )
+  return rule ? { rule, localName } : null
+}
+
+export function findAutomaticPreevalCalls(
+  code: string,
+  rules: readonly ImportedFunctionRule[],
+  filename?: string,
+): AutomaticCallTarget[] {
+  if (rules.length === 0) return []
+  const file = parseModule(code, filename)
+  if (file == null) return []
+  const marked = collectMarkedTargets(code, file)
+  const targets: AutomaticCallTarget[] = []
+
+  traverse(file, {
+    CallExpression(path) {
+      const matched = matchImportedCall(path, rules)
+      if (matched == null) return
+      const start = assertNumber(path.node.start, 'call start')
+      const end = assertNumber(path.node.end, 'call end')
+      const loc = path.node.loc?.start
+      const containingMarked = marked.find(
+        (target) => target.initStart <= start && end <= target.initEnd,
+      )
+      targets.push({
+        start,
+        end,
+        line: loc?.line ?? 1,
+        column: loc?.column ?? 0,
+        rule: matched.rule,
+        bindingName: matched.localName,
+        ...(containingMarked ? { containingMarkedName: containingMarked.name } : {}),
+      })
+    },
+  })
+
+  targets.sort((a, b) => a.start - b.start || a.end - b.end)
+  return targets
+}
+
 /**
  * Index stable top-level declarations. Used both for closure roots and for
  * resolving free names that Babel scope does not track (TS enums).
@@ -227,7 +414,8 @@ function indexLocalDecls(programPath: NodePath<t.Program>): Map<string, LocalDec
 
     if (stmt.type === 'ImportDeclaration') {
       if (stmt.importKind === 'type') continue
-      for (const specPath of stmtPath.get('specifiers')) {
+      const importPath = stmtPath as NodePath<t.ImportDeclaration>
+      for (const specPath of importPath.get('specifiers')) {
         const spec = specPath.node
         if (isTypeOnlyImportSpec(stmt, spec)) continue
         const name = importLocalName(spec)
@@ -312,7 +500,9 @@ function varKindOf(decl: LocalDecl): 'const' | 'let' | 'var' | null {
   if (!decl.path.isVariableDeclarator()) return null
   const parent = decl.path.parent
   if (parent.type !== 'VariableDeclaration') return null
-  return parent.kind
+  return parent.kind === 'const' || parent.kind === 'let' || parent.kind === 'var'
+    ? parent.kind
+    : null
 }
 
 function validateStableDep(decl: LocalDecl): void {
@@ -702,6 +892,7 @@ function statementCoveredByClosure(stmt: Statement, closure: Set<string>): boole
     const ids = inner.declarations
       .filter((d): d is typeof d & { id: t.Identifier } => d.id.type === 'Identifier')
       .map((d) => d.id.name)
+
     if (ids.length === 0) return false
     return ids.every((n) => closure.has(n))
   }
@@ -714,6 +905,55 @@ function statementCoveredByClosure(stmt: Statement, closure: Set<string>): boole
   if (stmt.type === 'TSTypeAliasDeclaration' || stmt.type === 'TSInterfaceDeclaration') return true
 
   return false
+}
+function assertAutomaticCallDependencies(
+  callPath: NodePath<t.CallExpression>,
+  programScope: Scope,
+): void {
+  const rejectLocal = (path: NodePath<t.Identifier>): void => {
+    if (!path.isReferencedIdentifier()) return
+    if (path.node.name === 'arguments') {
+      throw new Error('preeval: automatic call arguments cannot depend on arguments')
+    }
+    const binding = path.scope.getBinding(path.node.name)
+    if (binding != null && binding.scope !== programScope) {
+      throw new Error(
+        `preeval: automatic call depends on function-local binding "${path.node.name}"`,
+      )
+    }
+  }
+
+  callPath.traverse({
+    enter(path) {
+      if (isPureTypeNode(path.node)) path.skip()
+    },
+    ReferencedIdentifier(path) {
+      if (path.isIdentifier()) rejectLocal(path)
+    },
+    ThisExpression() {
+      throw new Error('preeval: automatic call arguments cannot depend on this')
+    },
+    Super() {
+      throw new Error('preeval: automatic call arguments cannot depend on super')
+    },
+    MetaProperty(path) {
+      const label = `${path.node.meta.name}.${path.node.property.name}`
+      if (label === 'import.meta' || label === 'new.target') {
+        throw new Error(`preeval: automatic call arguments cannot depend on ${label}`)
+      }
+    },
+  })
+}
+
+function containingTopLevelStatement(path: NodePath): Statement {
+  let current = path
+  while (current.parentPath != null && !current.parentPath.isProgram()) {
+    current = current.parentPath
+  }
+  if (!t.isStatement(current.node)) {
+    throw new Error('preeval: automatic call is not contained in a module statement')
+  }
+  return current.node
 }
 
 function allocateEvalExportNames(
@@ -756,16 +996,9 @@ function extractStatement(stmt: Statement, closure: Set<string>): Statement | nu
     return null
   }
   if (stmt.type === 'ExportDefaultDeclaration') {
-    if (stmt.declaration && (stmt.declaration as Statement).type) {
-      const decl = stmt.declaration
-      if (
-        decl.type === 'FunctionDeclaration'
-        || decl.type === 'ClassDeclaration'
-        || decl.type === 'TSEnumDeclaration'
-        || decl.type === 'VariableDeclaration'
-      ) {
-        return extractStatement(decl as Statement, closure)
-      }
+    const decl = stmt.declaration
+    if (decl.type === 'FunctionDeclaration' || decl.type === 'ClassDeclaration') {
+      return extractStatement(decl, closure)
     }
     return null
   }
@@ -826,6 +1059,134 @@ function buildExtractedCode(
   }).code
 }
 
+function allocateSyntheticName(base: string, used: Set<string>): string {
+  let i = 0
+  let candidate = base
+  while (used.has(candidate)) {
+    i++
+    candidate = `${base}_${i}`
+  }
+  used.add(candidate)
+  return candidate
+}
+
+function buildAutomaticExtractedCode(
+  body: Statement[],
+  closure: Set<string>,
+  call: t.CallExpression,
+  rule: ImportedFunctionRule,
+  localDecls: Map<string, LocalDecl>,
+): { code: string; name: string; evalExportName: string } {
+  const used = new Set(localDecls.keys())
+  const resultName = allocateSyntheticName('__preeval_call', used)
+  const evalExportName = allocateSyntheticName('__preeval_0', used)
+  const out: Statement[] = []
+
+  if (rule.substitute) {
+    const substituteName = allocateSyntheticName('__preeval_substitute', used)
+    const specifier = rule.substitute.import === 'default'
+      ? t.importDefaultSpecifier(t.identifier(substituteName))
+      : t.importSpecifier(
+          t.identifier(substituteName),
+          t.isValidIdentifier(rule.substitute.import)
+            ? t.identifier(rule.substitute.import)
+            : t.stringLiteral(rule.substitute.import),
+        )
+    out.push(t.importDeclaration([specifier], t.stringLiteral(rule.substitute.from)))
+    call.callee = t.identifier(substituteName)
+  }
+
+  for (const stmt of body) {
+    const extracted = extractStatement(stmt, closure)
+    if (extracted) out.push(extracted)
+  }
+  out.push(
+    t.variableDeclaration('const', [
+      t.variableDeclarator(t.identifier(resultName), call),
+    ]),
+    t.exportNamedDeclaration(
+      null,
+      [t.exportSpecifier(t.identifier(resultName), t.identifier(evalExportName))],
+    ),
+  )
+
+  const generated = generate(t.file(t.program(out, [], 'module')), {
+    compact: false,
+    comments: false,
+    jsescOption: { minimal: true },
+  }).code
+  return { code: generated, name: resultName, evalExportName }
+}
+
+export function analyzeAutomaticPreevalCall(
+  code: string,
+  targetStart: number,
+  rule: ImportedFunctionRule,
+  filename?: string,
+): EvaluationPlan {
+  const file = parseModule(code, filename)
+  if (file == null) throw new Error('preeval: failed to parse module for automatic call')
+  const programPath = resolveProgramPath(file)
+  const programScope = programPath.scope
+  const localDecls = indexLocalDecls(programPath)
+  let callPath: NodePath<t.CallExpression> | null = null
+  let matched: MatchedImportedCall | null = null
+
+  programPath.traverse({
+    CallExpression(path) {
+      if (path.node.start !== targetStart) return
+      const candidate = matchImportedCall(path, [rule])
+      if (candidate == null) return
+      callPath = path
+      matched = candidate
+      path.stop()
+    },
+  })
+  if (callPath == null || matched == null) {
+    throw new Error(`preeval: configured imported call was not found at offset ${targetStart}`)
+  }
+
+  const targetPath: NodePath<t.CallExpression> = callPath
+  const callMatch: MatchedImportedCall = matched
+  assertAutomaticCallDependencies(targetPath, programScope)
+  const roots = new Set<string>()
+  for (const argPath of targetPath.get('arguments')) {
+    for (const name of collectProgramFreeNames(argPath as NodePath, programScope, localDecls)) {
+      roots.add(name)
+    }
+  }
+  if (!rule.substitute) roots.add(callMatch.localName)
+
+  const closure = buildNameClosure(roots, programScope, localDecls)
+  const stmt = containingTopLevelStatement(targetPath)
+  const syntheticTarget = '__preeval_automatic_target'
+  assertNoInterferingStatements(
+    programPath,
+    [{ name: syntheticTarget, stmt }],
+    closure,
+    localDecls,
+    new Map([[syntheticTarget, closure]]),
+  )
+
+  const call = t.cloneNode(targetPath.node, true)
+  const built = buildAutomaticExtractedCode(
+    file.program.body,
+    closure,
+    call,
+    rule,
+    localDecls,
+  )
+  return {
+    code: built.code,
+    targets: [{
+      name: built.name,
+      initStart: assertNumber(targetPath.node.start, 'call start'),
+      initEnd: assertNumber(targetPath.node.end, 'call end'),
+      evalExportName: built.evalExportName,
+    }],
+  }
+}
+
 /**
  * Parse `code`, find `// @preeval`-marked top-level consts (exported or not),
  * compute the union lexical dependency closure, and build a minimal ESM module
@@ -837,52 +1198,17 @@ function buildExtractedCode(
 export function analyzePreevalModule(
   code: string,
   filename?: string,
+  options?: { skipMarkedNames?: ReadonlySet<string> },
 ): EvaluationPlan | null {
-  let file: File
-  try {
-    file = parse(code, {
-      sourceType: 'module',
-      sourceFilename: filename,
-      plugins: pluginsForFilename(filename),
-      // Needed so comment ranges are attached for marker detection.
-      attachComment: true,
-    })
-  } catch {
-    return null
-  }
+  const file = parseModule(code, filename)
+  if (file == null) return null
 
-  const rawTargets: { name: string; initStart: number; initEnd: number; stmt: Statement }[] = []
-
-  for (const stmt of file.program.body) {
-    const decl = asConstDeclaration(stmt)
-    if (decl == null) continue
-    // Targets: single declarator, Identifier, has initializer.
-    if (decl.declarations.length !== 1) continue
-    const d = decl.declarations[0]
-    if (d === undefined || d.id.type !== 'Identifier' || d.init == null) continue
-    if (!isMarked(code, file, stmt)) continue
-    rawTargets.push({
-      name: d.id.name,
-      initStart: assertNumber(d.init.start, 'initializer start'),
-      initEnd: assertNumber(d.init.end, 'initializer end'),
-      stmt,
-    })
-  }
-
+  const rawTargets = collectMarkedTargets(code, file).filter(
+    (target) => !options?.skipMarkedNames?.has(target.name),
+  )
   if (rawTargets.length === 0) return null
 
-  let programPath: NodePath<t.Program> | null = null
-  traverse(file, {
-    Program(path) {
-      programPath = path
-      path.stop()
-    },
-  })
-  if (programPath == null) {
-    throw new Error('preeval: failed to resolve program scope')
-  }
-  // TS does not narrow outer lets assigned in closures.
-  const pPath: NodePath<t.Program> = programPath
+  const pPath = resolveProgramPath(file)
   const programScope = pPath.scope
   const localDecls = indexLocalDecls(pPath)
 
@@ -936,4 +1262,87 @@ export function analyzePreevalModule(
 
   const extracted = buildExtractedCode(file.program.body, closure, targets)
   return { code: extracted, targets }
+}
+
+export interface SourceEdit {
+  start: number
+  end: number
+  replacement: string
+}
+
+function isTypeOnlyReference(path: NodePath): boolean {
+  let current: NodePath | null = path
+  while (current != null && !current.isStatement()) {
+    if (isPureTypeNode(current.node)) return true
+    current = current.parentPath
+  }
+  return false
+}
+
+function isInsideAnyRange(
+  path: NodePath,
+  ranges: readonly { start: number; end: number }[],
+): boolean {
+  const start = path.node.start
+  const end = path.node.end
+  if (typeof start !== 'number' || typeof end !== 'number') return false
+  return ranges.some((range) => range.start <= start && end <= range.end)
+}
+
+export function planAutomaticImportCleanup(
+  code: string,
+  successfulBindings: ReadonlySet<string>,
+  replacementRanges: readonly { start: number; end: number }[],
+  filename?: string,
+): SourceEdit[] {
+  if (successfulBindings.size === 0) return []
+  const file = parseModule(code, filename)
+  if (file == null) return []
+  const programPath = resolveProgramPath(file)
+  const edits: SourceEdit[] = []
+
+  for (const stmtPath of programPath.get('body')) {
+    if (!stmtPath.isImportDeclaration()) continue
+    const decl = stmtPath.node
+    const kept: typeof decl.specifiers = []
+    let changed = false
+
+    for (const spec of decl.specifiers) {
+      const localName = spec.local.name
+      if (!successfulBindings.has(localName) || isTypeOnlyImportSpec(decl, spec)) {
+        kept.push(spec)
+        continue
+      }
+
+      const binding = programPath.scope.getBinding(localName)
+      const hasRuntimeReference = binding?.referencePaths.some(
+        (reference) =>
+          !isTypeOnlyReference(reference)
+          && !isInsideAnyRange(reference, replacementRanges),
+      ) ?? false
+      if (hasRuntimeReference) {
+        kept.push(spec)
+      } else {
+        changed = true
+      }
+    }
+
+    if (!changed) continue
+    const start = assertNumber(decl.start, 'import start')
+    const end = assertNumber(decl.end, 'import end')
+    if (kept.length === 0) {
+      edits.push({ start, end, replacement: '' })
+      continue
+    }
+    const replacement = generate(
+      t.importDeclaration(
+        kept.map((spec) => t.cloneNode(spec, true)),
+        t.cloneNode(decl.source, true),
+      ),
+      { compact: false, comments: false, jsescOption: { minimal: true } },
+    ).code
+    edits.push({ start, end, replacement })
+  }
+
+  return edits
 }

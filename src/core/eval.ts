@@ -130,13 +130,25 @@ export async function evalExtractedModule(
   }
 }
 
-function readTargetValues(
+function isThenable(value: unknown): boolean {
+  return (
+    (typeof value === 'object' && value !== null) || typeof value === 'function'
+  ) && typeof (value as { then?: unknown }).then === 'function'
+}
+
+export function readTargetValues(
   ns: Record<string, unknown>,
   targets: PreevalTarget[],
 ): Map<string, unknown> {
   const values = new Map<string, unknown>()
   for (const target of targets) {
-    values.set(target.name, ns[target.evalExportName])
+    const value = ns[target.evalExportName]
+    if (isThenable(value)) {
+      throw new Error(
+        `preeval: target "${target.name}" returned a Promise/thenable; asynchronous results are not supported`,
+      )
+    }
+    values.set(target.name, value)
   }
   return values
 }
