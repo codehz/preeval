@@ -319,4 +319,134 @@ export { answer }
     expect(res!.code).toContain('const answer = 42')
     expect(warns).toEqual([])
   })
+
+  it('non-strict: side-effect import before target warns and skips module', async () => {
+    const dir = tmpDir()
+    writeFileSync(join(dir, 'helper.js'), 'export const base = 1\n')
+    writeFileSync(join(dir, 'mutate.js'), 'import { base as b } from "./helper.js"; void b\n')
+    const entry = join(dir, 'entry.js')
+    const code = `import { base } from './helper.js'
+import './mutate.js'
+// @preeval
+const answer = base
+export { answer }
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(code, entry, {}, ctx)
+
+    expect(res).toBeNull()
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toMatch(/side-effect import/)
+  })
+
+  it('strict: side-effect import before target errors and throws', async () => {
+    const dir = tmpDir()
+    writeFileSync(join(dir, 'helper.js'), 'export const base = 1\n')
+    writeFileSync(join(dir, 'mutate.js'), 'export {}\n')
+    const entry = join(dir, 'entry.js')
+    const code = `import { base } from './helper.js'
+import './mutate.js'
+// @preeval
+const answer = base
+export { answer }
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    await expect(transformPreeval(code, entry, { strict: true }, ctx)).rejects.toThrow(
+      /side-effect import/,
+    )
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toMatch(/^ERR:/)
+  })
+
+  it('non-strict: hoisted post-target mutator warns and skips module', async () => {
+    const dir = tmpDir()
+    const entry = join(dir, 'entry.js')
+    const code = `const obj = { n: 1 }
+// @preeval
+const answer = obj.n
+export { answer }
+function bump() { obj.n = 2 }
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(code, entry, {}, ctx)
+
+    expect(res).toBeNull()
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toMatch(/hoisted declaration|closure binding/)
+  })
+
+  it('strict: hoisted post-target mutator errors and throws', async () => {
+    const dir = tmpDir()
+    const entry = join(dir, 'entry.js')
+    const code = `const obj = { n: 1 }
+// @preeval
+const answer = obj.n
+export { answer }
+function bump() { obj.n = 2 }
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    await expect(transformPreeval(code, entry, { strict: true }, ctx)).rejects.toThrow(
+      /hoisted declaration|closure binding/,
+    )
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toMatch(/^ERR:/)
+  })
+
+  it('evaluates through export default function dependencies', async () => {
+    const dir = tmpDir()
+    const entry = join(dir, 'entry.js')
+    const code = `export default function helper() { return 40 }
+// @preeval
+const answer = helper() + 2
+export { answer }
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(code, entry, {}, ctx)
+
+    expect(res).not.toBeNull()
+    expect(res!.code).toContain('const answer = 42')
+    expect(warns).toEqual([])
+  })
+
+  it('non-strict: import.meta in target warns and skips module', async () => {
+    const dir = tmpDir()
+    const entry = join(dir, 'entry.js')
+    const code = `// @preeval
+const answer = import.meta.url
+export { answer }
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(code, entry, {}, ctx)
+
+    expect(res).toBeNull()
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toMatch(/import\.meta/)
+  })
+
+  it('strict: import.meta in target errors and throws', async () => {
+    const dir = tmpDir()
+    const entry = join(dir, 'entry.js')
+    const code = `// @preeval
+const answer = import.meta.url
+export { answer }
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    await expect(transformPreeval(code, entry, { strict: true }, ctx)).rejects.toThrow(/import\.meta/)
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toMatch(/^ERR:/)
+  })
 })

@@ -243,8 +243,10 @@ function indexLocalDecls(programPath: NodePath<t.Program>): Map<string, LocalDec
       continue
     }
 
+    // Named and default exports can wrap a local declaration with a stable id.
     const innerPath =
-      stmtPath.isExportNamedDeclaration() && stmtPath.node.declaration
+      (stmtPath.isExportNamedDeclaration() || stmtPath.isExportDefaultDeclaration())
+      && stmtPath.node.declaration
         ? (stmtPath.get('declaration') as NodePath)
         : stmtPath
     const inner = innerPath.node
@@ -366,12 +368,40 @@ function depsOfDecl(
   if (decl.path.isVariableDeclarator()) {
     const init = decl.path.get('init')
     if (!init.node) return new Set()
+    assertNoImportMeta(init as NodePath)
     return collectProgramFreeNames(init as NodePath, programScope, localDecls)
   }
 
   // function / class / enum — whole declaration body
+  assertNoImportMeta(decl.path)
   return collectProgramFreeNames(decl.path, programScope, localDecls)
 }
+
+/** Reject `import.meta` anywhere under a closure root (eval temp path would leak). */
+function assertNoImportMeta(root: NodePath): void {
+  const reject = (node: t.MetaProperty): void => {
+    if (node.meta.name === 'import' && node.property.name === 'meta') {
+      throw new Error(
+        'preeval: import.meta is not supported in pre-eval closures; refusing to extract',
+      )
+    }
+  }
+
+  if (root.isMetaProperty()) {
+    reject(root.node)
+    return
+  }
+
+  root.traverse({
+    enter(path) {
+      if (isPureTypeNode(path.node)) path.skip()
+    },
+    MetaProperty(path) {
+      reject(path.node)
+    },
+  })
+}
+
 
 /**
  * Names of sibling declarators in the same VariableDeclaration as `name`
@@ -397,8 +427,22 @@ function unselectedSiblingDeclarators(
 }
 
 /**
+ * Function/class declarations (incl. `export` wrappers) are hoisted, so a body
+ * that touches the closure can run via a pre-target call even when the decl
+ * text sits after every marked const.
+ */
+function isHoistableDeclaration(stmt: Statement): boolean {
+  const inner = unwrapExport(stmt)
+  return (
+    (inner.type === 'FunctionDeclaration' && inner.id != null)
+    || (inner.type === 'ClassDeclaration' && inner.id != null)
+  )
+}
+
+/**
  * Reject non-closure top-level statements that run before a target and touch
  * the closure (reads or writes). Skipping them would change evaluation order.
+ * Hoisted function/class declarations are scanned file-wide for the same reason.
  */
 function assertNoInterferingStatements(
   programPath: NodePath<t.Program>,
@@ -408,31 +452,52 @@ function assertNoInterferingStatements(
 ): void {
   const programScope = programPath.scope
   const targetStarts = targets.map((t) => assertNumber(t.stmt.start, 'target start'))
+  const closureHasImports = [...closure].some((n) => localDecls.get(n)?.kind === 'import')
 
   for (const stmtPath of programPath.get('body')) {
     const stmt = stmtPath.node
     const stmtStart = assertNumber(stmt.start, 'statement start')
     const beforeAnyTarget = targetStarts.some((ts) => stmtStart < ts)
-    if (!beforeAnyTarget) continue
+    const hoistable = isHoistableDeclaration(stmt)
+
+    // Post-target non-hoisted statements cannot affect target initializers.
+    if (!beforeAnyTarget && !hoistable) continue
 
     // Statements fully covered by the closure are emitted and run in order.
     if (statementCoveredByClosure(stmt, closure)) continue
 
-
+    // Side-effect imports (`import './x'` or only type specs) are dropped from
+    // the extract. If the closure still pulls value imports, those modules may
+    // have been mutated by the skipped side-effect import — refuse.
+    if (
+      beforeAnyTarget
+      && stmt.type === 'ImportDeclaration'
+      && stmt.importKind !== 'type'
+      && closureHasImports
+    ) {
+      const runtimeSpecs = stmt.specifiers.filter((s) => !isTypeOnlyImportSpec(stmt, s))
+      if (runtimeSpecs.length === 0) {
+        throw new Error(
+          'preeval: side-effect import before marked const may mutate closure bindings; refusing to extract',
+        )
+      }
+    }
 
     const free = collectProgramFreeNames(stmtPath, programScope, localDecls)
     for (const name of free) {
       if (closure.has(name)) {
         throw new Error(
-          `preeval: statement before marked const references closure binding "${name}"; refusing to extract (would skip intervening effects)`,
+          hoistable && !beforeAnyTarget
+            ? `preeval: hoisted declaration references closure binding "${name}"; refusing to extract (call sites before a marked const could observe mutations)`
+            : `preeval: statement before marked const references closure binding "${name}"; refusing to extract (would skip intervening effects)`,
         )
       }
     }
 
-    // Also reject top-level writes to closure bindings via member assignment
-    // when the object is a free name already handled above; plain Assignment
-    // to a closure binding would reassign and fail constant checks if the
-    // binding is in-module. Assignment targets are not always "referenced".
+    // Assignment targets are not always "referenced"; only matters for code that
+    // actually runs before a target (hoisted decl bodies already covered above).
+    if (!beforeAnyTarget) continue
+
     stmtPath.traverse({
       enter(path) {
         if (isPureTypeNode(path.node)) path.skip()

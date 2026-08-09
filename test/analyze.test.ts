@@ -129,7 +129,6 @@ export const x = <number>1
 
   it('extracts const → function → import closures and drops unused imports', () => {
     const code = `import { base, unused } from './helper.js'
-import './side-effect.js'
 function addTwo(n) { return n + 2 }
 const mid = addTwo(base)
 // @preeval
@@ -140,7 +139,6 @@ export { answer }
     expect(plan).not.toBeNull()
     expect(plan!.code).toContain("import { base } from './helper.js'")
     expect(plan!.code).not.toContain('unused')
-    expect(plan!.code).not.toContain('side-effect')
     expect(plan!.code).toContain('function addTwo')
     expect(plan!.code).toContain('const mid')
     expect(plan!.code).toContain('const answer')
@@ -207,5 +205,94 @@ export const answer = local
     expect(plan!.code).not.toContain('must not execute')
     expect(plan!.code).toContain('const base = 40')
     expect(plan!.code).toContain('const local = base + 2')
+  })
+
+  it('rejects side-effect imports before a marked const when the closure imports values', () => {
+    const code = `import { base } from './helper.js'
+import './mutate.js'
+// @preeval
+const answer = base
+`
+    expect(() => analyzePreevalModule(code)).toThrow(/side-effect import/)
+  })
+
+  it('allows side-effect imports after every marked const', () => {
+    const code = `import { base } from './helper.js'
+// @preeval
+const answer = base
+import './late-side-effect.js'
+`
+    const plan = analyzePreevalModule(code)
+    expect(plan).not.toBeNull()
+    expect(plan!.code).toContain("import { base } from './helper.js'")
+    expect(plan!.code).not.toContain('late-side-effect')
+  })
+
+  it('allows side-effect imports when the closure has no value imports', () => {
+    const code = `import './polyfill.js'
+const base = 40
+// @preeval
+const answer = base + 2
+`
+    const plan = analyzePreevalModule(code)
+    expect(plan).not.toBeNull()
+    expect(plan!.code).toContain('const base = 40')
+    expect(plan!.code).not.toContain('polyfill')
+  })
+
+  it('rejects hoisted function decls after a target that touch the closure', () => {
+    const code = `const obj = { n: 1 }
+// @preeval
+const answer = obj.n
+function bump() { obj.n = 2 }
+`
+    expect(() => analyzePreevalModule(code)).toThrow(/hoisted declaration|closure binding/)
+  })
+
+  it('rejects pre-target calls that rely on post-target hoisted mutators', () => {
+    const code = `const obj = { n: 1 }
+bump()
+// @preeval
+const answer = obj.n
+function bump() { obj.n = 2 }
+`
+    expect(() => analyzePreevalModule(code)).toThrow(/hoisted declaration|closure binding/)
+  })
+
+  it('indexes export default function dependencies', () => {
+    const code = `export default function helper() { return 40 }
+// @preeval
+const answer = helper() + 2
+`
+    const plan = analyzePreevalModule(code)
+    expect(plan).not.toBeNull()
+    expect(plan!.code).toContain('function helper')
+    expect(plan!.code).toContain('helper() + 2')
+  })
+
+  it('indexes export default class dependencies', () => {
+    const code = `export default class Box { value = 40 }
+// @preeval
+const answer = new Box().value + 2
+`
+    const plan = analyzePreevalModule(code)
+    expect(plan).not.toBeNull()
+    expect(plan!.code).toContain('class Box')
+    expect(plan!.code).toContain('new Box().value + 2')
+  })
+
+  it('rejects import.meta in a marked initializer', () => {
+    const code = `// @preeval
+const answer = import.meta.url
+`
+    expect(() => analyzePreevalModule(code)).toThrow(/import\.meta/)
+  })
+
+  it('rejects import.meta inside a closure function dependency', () => {
+    const code = `function where() { return import.meta.url }
+// @preeval
+const answer = where()
+`
+    expect(() => analyzePreevalModule(code)).toThrow(/import\.meta/)
   })
 })
