@@ -65,11 +65,11 @@ export default defineConfig({
 })
 ```
 
-Matching is binding-aware and supports named imports, default imports, aliases declared in the import, and static namespace properties (`ns.fn()` and `ns['fn']()`). It does not follow local aliases, re-exports/barrels, CommonJS `require`, dynamic imports, bundler-resolved IDs, or computed property expressions.
+Matching is binding-aware and supports named imports, default imports, aliases declared in the import, and static namespace properties (`ns.fn()` / `ns['fn']()`, and the same forms as tagged-template tags). Direct call expressions and tagged templates (`fn\`...\``, `ns.fn\`...\``) are both macro sites. It does not follow local aliases, re-exports/barrels, CommonJS `require`, dynamic imports, bundler-resolved IDs, or computed property expressions.
 
-Every matched syntactic call is a macro site: it runs once during the build even inside a function, loop, or dead control-flow branch. Arguments may use literals, ambient globals, imports, and stable module-level `const`/function/class/enum dependencies. Function parameters and function-local bindings, `let`/`var`, reassigned bindings, `this`, `arguments`, `super`, `new.target`, and `import.meta` are rejected.
+Every matched syntactic call or tagged template is a macro site: it runs once during the build even inside a function, loop, or dead control-flow branch. Call arguments and tagged-template interpolations may use literals, ambient globals, imports, and stable module-level `const`/function/class/enum dependencies. Function parameters and function-local bindings, `let`/`var`, reassigned bindings, `this`, `arguments`, `super`, `new.target`, and `import.meta` are rejected.
 
-`substitute` changes only the callee imported by the temporary evaluation module. Original arguments are preserved, and emitted runtime code never imports or calls the substitute. Signature, export existence, equivalence, side effects, and purity are intentionally not checked.
+`substitute` changes only the callee/tag imported by the temporary evaluation module. Original arguments and template contents are preserved, and emitted runtime code never imports or calls the substitute. Signature, export existence, equivalence, side effects, and purity are intentionally not checked.
 
 ## Usage
 
@@ -161,6 +161,6 @@ Rejected: `undefined`, `NaN`, `±Infinity`, `bigint`, functions, symbols, `Date`
 
 ## How it works
 
-1. **Analyze** — Babel finds configured direct import calls and marked top-level constants, verifies binding identity, and builds their stable same-file dependency closures.
-2. **Extract + evaluate** — automatic calls execute first in source order; marked bindings then evaluate against successful intermediate constants. Minimal ESM files are written next to the source, dynamically imported, and removed in `finally`.
+1. **Analyze** — Babel finds configured direct import calls, tagged templates, and marked top-level constants, verifies binding identity, and builds their stable same-file dependency closures.
+2. **Extract + evaluate** — automatic call/tag sites execute first in source order; marked bindings then evaluate against successful intermediate constants. Minimal ESM files are written next to the source, dynamically imported, and removed in `finally`.
 3. **Serialize + replace** — JSON-superset results become literals through one non-overlapping MagicString edit set. Dead matched import bindings are removed without disturbing live specifiers.

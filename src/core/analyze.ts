@@ -40,7 +40,7 @@ export interface MarkedBindingTarget {
   initEnd: number
 }
 
-/** One direct call matched to a configured static ESM import. */
+/** One direct call or tagged template matched to a configured static ESM import. */
 export interface AutomaticCallTarget {
   start: number
   end: number
@@ -317,11 +317,11 @@ function staticMemberName(member: t.MemberExpression): string | null {
   return null
 }
 
-function matchImportedCall(
-  path: NodePath<t.CallExpression>,
+function matchImportedCallee(
+  callee: t.Node,
+  scope: Scope,
   rules: readonly ImportedFunctionRule[],
 ): MatchedImportedCall | null {
-  const callee = path.node.callee
   let localName: string
   let exportName: string
   let requireNamespace = false
@@ -338,7 +338,7 @@ function matchImportedCall(
     return null
   }
 
-  const binding = path.scope.getBinding(localName)
+  const binding = scope.getBinding(localName)
   if (binding == null) return null
   const spec = binding.path.node
   if (
@@ -364,6 +364,29 @@ function matchImportedCall(
   return rule ? { rule, localName } : null
 }
 
+function pushAutomaticTarget(
+  path: NodePath,
+  matched: MatchedImportedCall,
+  marked: RawMarkedTarget[],
+  targets: AutomaticCallTarget[],
+): void {
+  const start = assertNumber(path.node.start, 'call start')
+  const end = assertNumber(path.node.end, 'call end')
+  const loc = path.node.loc?.start
+  const containingMarked = marked.find(
+    (target) => target.initStart <= start && end <= target.initEnd,
+  )
+  targets.push({
+    start,
+    end,
+    line: loc?.line ?? 1,
+    column: loc?.column ?? 0,
+    rule: matched.rule,
+    bindingName: matched.localName,
+    ...(containingMarked ? { containingMarkedName: containingMarked.name } : {}),
+  })
+}
+
 export function findAutomaticPreevalCalls(
   code: string,
   rules: readonly ImportedFunctionRule[],
@@ -377,23 +400,14 @@ export function findAutomaticPreevalCalls(
 
   traverse(file, {
     CallExpression(path) {
-      const matched = matchImportedCall(path, rules)
+      const matched = matchImportedCallee(path.node.callee, path.scope, rules)
       if (matched == null) return
-      const start = assertNumber(path.node.start, 'call start')
-      const end = assertNumber(path.node.end, 'call end')
-      const loc = path.node.loc?.start
-      const containingMarked = marked.find(
-        (target) => target.initStart <= start && end <= target.initEnd,
-      )
-      targets.push({
-        start,
-        end,
-        line: loc?.line ?? 1,
-        column: loc?.column ?? 0,
-        rule: matched.rule,
-        bindingName: matched.localName,
-        ...(containingMarked ? { containingMarkedName: containingMarked.name } : {}),
-      })
+      pushAutomaticTarget(path, matched, marked, targets)
+    },
+    TaggedTemplateExpression(path) {
+      const matched = matchImportedCallee(path.node.tag, path.scope, rules)
+      if (matched == null) return
+      pushAutomaticTarget(path, matched, marked, targets)
     },
   })
 
@@ -907,7 +921,7 @@ function statementCoveredByClosure(stmt: Statement, closure: Set<string>): boole
   return false
 }
 function assertAutomaticCallDependencies(
-  callPath: NodePath<t.CallExpression>,
+  exprPath: NodePath,
   programScope: Scope,
 ): void {
   const rejectLocal = (path: NodePath<t.Identifier>): void => {
@@ -923,7 +937,7 @@ function assertAutomaticCallDependencies(
     }
   }
 
-  callPath.traverse({
+  exprPath.traverse({
     enter(path) {
       if (isPureTypeNode(path.node)) path.skip()
     },
@@ -1073,7 +1087,7 @@ function allocateSyntheticName(base: string, used: Set<string>): string {
 function buildAutomaticExtractedCode(
   body: Statement[],
   closure: Set<string>,
-  call: t.CallExpression,
+  expression: t.CallExpression | t.TaggedTemplateExpression,
   rule: ImportedFunctionRule,
   localDecls: Map<string, LocalDecl>,
 ): { code: string; name: string; evalExportName: string } {
@@ -1093,7 +1107,8 @@ function buildAutomaticExtractedCode(
             : t.stringLiteral(rule.substitute.import),
         )
     out.push(t.importDeclaration([specifier], t.stringLiteral(rule.substitute.from)))
-    call.callee = t.identifier(substituteName)
+    if (expression.type === 'CallExpression') expression.callee = t.identifier(substituteName)
+    else expression.tag = t.identifier(substituteName)
   }
 
   for (const stmt of body) {
@@ -1102,7 +1117,7 @@ function buildAutomaticExtractedCode(
   }
   out.push(
     t.variableDeclaration('const', [
-      t.variableDeclarator(t.identifier(resultName), call),
+      t.variableDeclarator(t.identifier(resultName), expression),
     ]),
     t.exportNamedDeclaration(
       null,
@@ -1118,6 +1133,15 @@ function buildAutomaticExtractedCode(
   return { code: generated, name: resultName, evalExportName }
 }
 
+function automaticExpressionPayloadPaths(
+  path: NodePath<t.CallExpression | t.TaggedTemplateExpression>,
+): NodePath[] {
+  if (path.isCallExpression()) {
+    return path.get('arguments') as NodePath[]
+  }
+  return path.get('quasi').get('expressions') as NodePath[]
+}
+
 export function analyzeAutomaticPreevalCall(
   code: string,
   targetStart: number,
@@ -1129,36 +1153,45 @@ export function analyzeAutomaticPreevalCall(
   const programPath = resolveProgramPath(file)
   const programScope = programPath.scope
   const localDecls = indexLocalDecls(programPath)
-  let callPath: NodePath<t.CallExpression> | null = null
+  let targetPath: NodePath<t.CallExpression | t.TaggedTemplateExpression> | null = null
   let matched: MatchedImportedCall | null = null
 
   programPath.traverse({
     CallExpression(path) {
       if (path.node.start !== targetStart) return
-      const candidate = matchImportedCall(path, [rule])
+      const candidate = matchImportedCallee(path.node.callee, path.scope, [rule])
       if (candidate == null) return
-      callPath = path
+      targetPath = path
+      matched = candidate
+      path.stop()
+    },
+    TaggedTemplateExpression(path) {
+      if (path.node.start !== targetStart) return
+      const candidate = matchImportedCallee(path.node.tag, path.scope, [rule])
+      if (candidate == null) return
+      targetPath = path
       matched = candidate
       path.stop()
     },
   })
-  if (callPath == null || matched == null) {
+  if (targetPath == null || matched == null) {
     throw new Error(`preeval: configured imported call was not found at offset ${targetStart}`)
   }
 
-  const targetPath: NodePath<t.CallExpression> = callPath
+  // Re-bind after traverse so control-flow narrowing survives the mutation above.
+  const expressionPath: NodePath<t.CallExpression | t.TaggedTemplateExpression> = targetPath
   const callMatch: MatchedImportedCall = matched
-  assertAutomaticCallDependencies(targetPath, programScope)
+  assertAutomaticCallDependencies(expressionPath, programScope)
   const roots = new Set<string>()
-  for (const argPath of targetPath.get('arguments')) {
-    for (const name of collectProgramFreeNames(argPath as NodePath, programScope, localDecls)) {
+  for (const payloadPath of automaticExpressionPayloadPaths(expressionPath)) {
+    for (const name of collectProgramFreeNames(payloadPath, programScope, localDecls)) {
       roots.add(name)
     }
   }
   if (!rule.substitute) roots.add(callMatch.localName)
 
   const closure = buildNameClosure(roots, programScope, localDecls)
-  const stmt = containingTopLevelStatement(targetPath)
+  const stmt = containingTopLevelStatement(expressionPath)
   const syntheticTarget = '__preeval_automatic_target'
   assertNoInterferingStatements(
     programPath,
@@ -1168,11 +1201,11 @@ export function analyzeAutomaticPreevalCall(
     new Map([[syntheticTarget, closure]]),
   )
 
-  const call = t.cloneNode(targetPath.node, true)
+  const expression = t.cloneNode(expressionPath.node, true)
   const built = buildAutomaticExtractedCode(
     file.program.body,
     closure,
-    call,
+    expression,
     rule,
     localDecls,
   )
@@ -1180,8 +1213,8 @@ export function analyzeAutomaticPreevalCall(
     code: built.code,
     targets: [{
       name: built.name,
-      initStart: assertNumber(targetPath.node.start, 'call start'),
-      initEnd: assertNumber(targetPath.node.end, 'call end'),
+      initStart: assertNumber(expressionPath.node.start, 'call start'),
+      initEnd: assertNumber(expressionPath.node.end, 'call end'),
       evalExportName: built.evalExportName,
     }],
   }

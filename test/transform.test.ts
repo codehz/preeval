@@ -853,4 +853,116 @@ export const value = named()
     expect(res!.code).toContain('export const value = 1')
     expect(warns).toEqual([])
   })
+
+  it('evaluates tagged templates for imported tags', async () => {
+    const dir = tmpDir()
+    writeFileSync(
+      join(dir, 'helper.js'),
+      `export default (strings, ...values) => strings[0] + values.join('') + (strings[1] ?? '')
+export const named = (strings, ...values) => ['N', ...values, strings.join('|')].join(':')
+`,
+    )
+    const entry = join(dir, 'entry.js')
+    const code = `import def from './helper.js'
+import { named, named as alias } from './helper.js'
+import * as ns from './helper.js'
+const x = 1
+export const values = [def\`a\${x}b\`, named\`c\${x}\`, alias\`d\${x}\`, ns.named\`e\${x}\`, ns['named']\`f\${x}\`]
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(code, entry, { imports: rulesFor('./helper.js') }, ctx)
+
+    expect(res).not.toBeNull()
+    expect(res!.code).toContain(
+      'export const values = ["a1b", "N:1:c|", "N:1:d|", "N:1:e|", "N:1:f|"]',
+    )
+    expect(res!.code).not.toContain("from './helper.js'")
+    expect(warns).toEqual([])
+  })
+
+  it('uses substitutes for tagged templates only at eval time', async () => {
+    const dir = tmpDir()
+    writeFileSync(join(dir, 'runtime.js'), `throw new Error('runtime module initialized')\nexport const tag = () => 0\n`)
+    writeFileSync(
+      join(dir, 'pure.js'),
+      `export const tagPure = (strings, value) => ({ text: strings[0] + value + strings[1] })\n`,
+    )
+    const entry = join(dir, 'entry.js')
+    const code = `import { tag } from './runtime.js'
+export const output = tag\`ok-\${'x'}\`
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(code, entry, {
+      imports: [{
+        from: './runtime.js',
+        import: 'tag',
+        substitute: { from: './pure.js', import: 'tagPure' },
+      }],
+    }, ctx)
+
+    expect(res!.code).toContain('export const output = {"text":"ok-x"}')
+    expect(res!.code).not.toContain('runtime.js')
+    expect(res!.code).not.toContain('pure.js')
+    expect(warns).toEqual([])
+  })
+
+  it('rejects function-local interpolations in tagged templates', async () => {
+    const dir = tmpDir()
+    writeFileSync(
+      join(dir, 'helper.js'),
+      `export const named = (strings, value) => strings[0] + value + strings[1]\n`,
+    )
+    const entry = join(dir, 'entry.js')
+    const code = `import { named } from './helper.js'
+const base = 'ok'
+export function value(input) {
+  return named\`\${base}-\${input}\`
+}
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(
+      code,
+      entry,
+      { imports: [{ from: './helper.js', import: 'named' }] },
+      ctx,
+    )
+
+    expect(res).toBeNull()
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toMatch(/function-local binding "input"/)
+  })
+
+  it('evaluates nested tagged templates before outer calls', async () => {
+    const dir = tmpDir()
+    writeFileSync(
+      join(dir, 'helper.js'),
+      `let count = 0
+export const inner = (strings) => ++count + strings[0]
+export const outer = (value) => value + ':' + ++count
+`,
+    )
+    const entry = join(dir, 'entry.js')
+    const code = `import { inner, outer } from './helper.js'
+export const value = outer(inner\`x\`)
+`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+
+    const res = await transformPreeval(code, entry, {
+      imports: [
+        { from: './helper.js', import: 'inner' },
+        { from: './helper.js', import: 'outer' },
+      ],
+    }, ctx)
+
+    expect(res!.code).toContain('export const value = "1x:2"')
+    expect(res!.code).not.toContain('helper.js')
+    expect(warns).toEqual([])
+  })
 })

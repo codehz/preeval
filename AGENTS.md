@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-`@codehz/preeval` is an **author-side publish-build plugin** that pre-evaluates configured direct calls to statically imported ESM functions plus `// @preeval`-marked top-level `const`s. It evaluates same-file stable dependency closures and rewrites successful targets to JSON-superset literals. Consumers get plain data without installing this package.
+`@codehz/preeval` is an **author-side publish-build plugin** that pre-evaluates configured direct calls and tagged templates of statically imported ESM functions plus `// @preeval`-marked top-level `const`s. It evaluates same-file stable dependency closures and rewrites successful targets to JSON-superset literals. Consumers get plain data without installing this package.
 
 - Package: `@codehz/preeval` (ESM-only, MIT)
 - Hosts: Vite (library mode), Rollup, Bun.build via unplugin
@@ -16,8 +16,8 @@ Single pipeline, shared unplugin factory, thin bundler adapters.
 bundler (vite|rollup|bun)
   → unpluginFactory (src/index.ts)  // marker fast path unless automatic imports exist
     → transformPreeval (src/core/transform.ts)
-        1. find/analyze automatic imported calls
-        2. eval + serialize calls in macro order
+        1. find/analyze automatic imported calls and tagged templates
+        2. eval + serialize sites in macro order
         3. analyze/eval marked bindings against intermediate constants
         4. apply non-overlapping replacements + dead import cleanup
 ```
@@ -27,7 +27,7 @@ bundler (vite|rollup|bun)
 | Public factory | `src/index.ts` | `unpluginFactory`, `preeval`, default export |
 | Adapters | `src/vite.ts`, `src/rollup.ts`, `src/bun.ts` | `create*Plugin(unpluginFactory)` one-liners |
 | Options | `src/types.ts` | `Options`: `onFailure`, `imports`, `allowNode`, `include`, `exclude` |
-| Analyze | `src/core/analyze.ts` | call matching, dependency closures, evaluation plans, import cleanup plans |
+| Analyze | `src/core/analyze.ts` | call/tag matching, dependency closures, evaluation plans, import cleanup plans |
 | Eval | `src/core/eval.ts` | `evalExtractedModule` → `Map<localName, value>` |
 | Serialize | `src/core/serialize.ts` | `isJsonValue` / `serializeJson` |
 | Orchestrate | `src/core/transform.ts` | `transformPreeval` + `TransformContext { warn, error }` |
@@ -79,8 +79,8 @@ There is no lint/format/coverage script. Typecheck is implicit via editor/tsdown
 - **Strict TS**: `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`; unused-locals/params intentionally off.
 - **Marker / automatic scope rules** (do not loosen casually):
   - markers remain exact top-level single-declarator `const` comments
-  - automatic calls match exact source + export binding identity only
-  - direct named/default/import-alias calls and static namespace properties only
+  - automatic calls/tags match exact source + export binding identity only
+  - direct named/default/import-alias calls/tags and static namespace properties only (`fn()`, `fn\`...\``, `ns.fn()`, `ns.fn\`...\``)
   - stable module deps only: import / const / function / class / enum
   - reject local bindings, `let`/`var`, reassignment, `this`/`arguments`/`super`, `new.target`, and `import.meta`
   - synchronous JSON-superset results only; no sandbox or purity checking

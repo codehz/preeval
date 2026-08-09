@@ -366,6 +366,39 @@ ns['fn']()
     ])
   })
 
+  it('matches tagged templates with the same binding rules', () => {
+    const code = `import def from 'pkg'
+import { fn, fn as alias } from 'pkg'
+import * as ns from 'pkg'
+def\`a\`
+fn\`b\`
+alias\`c\`
+ns.fn\`d\`
+ns['fn']\`e\`
+`
+    const calls = findAutomaticPreevalCalls(code, [
+      { from: 'pkg', import: 'default' },
+      { from: 'pkg', import: 'fn' },
+    ])
+    expect(calls).toHaveLength(5)
+    expect(calls.map((call) => call.rule.import)).toEqual([
+      'default',
+      'fn',
+      'fn',
+      'fn',
+      'fn',
+    ])
+  })
+
+  it('does not treat untagged template literals as automatic sites', () => {
+    const code = `import { fn } from 'pkg'
+const value = \`fn()\`
+fn()
+`
+    const calls = findAutomaticPreevalCalls(code, [{ from: 'pkg', import: 'fn' }])
+    expect(calls).toHaveLength(1)
+  })
+
   it('does not follow local aliases or unsupported module forms', () => {
     const code = `import { fn } from 'pkg'
 const local = fn
