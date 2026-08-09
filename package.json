@@ -1,11 +1,69 @@
 {
   "name": "@codehz/preeval",
-  "module": "index.ts",
+  "version": "0.1.0",
+  "description": "Build-time pre-evaluation of // @preeval marked exported consts for library publish builds",
   "type": "module",
-  "devDependencies": {
-    "@types/bun": "latest"
+  "license": "MIT",
+  "keywords": [
+    "unplugin",
+    "vite",
+    "rollup",
+    "bun",
+    "build",
+    "const",
+    "precompute",
+    "preeval"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./vite": {
+      "types": "./dist/vite.d.ts",
+      "import": "./dist/vite.js"
+    },
+    "./rollup": {
+      "types": "./dist/rollup.d.ts",
+      "import": "./dist/rollup.js"
+    },
+    "./bun": {
+      "types": "./dist/bun.d.ts",
+      "import": "./dist/bun.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "prepublishOnly": "bun run build"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
   },
   "peerDependencies": {
     "typescript": "^5"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@babel/parser": "^7.28.0",
+    "magic-string": "^0.30.21",
+    "unplugin": "^3.3.0"
+  },
+  "devDependencies": {
+    "@types/babel__generator": "^7.27.0",
+    "@types/bun": "latest",
+    "tsdown": "^0.22.14",
+    "vitest": "^4.1.10"
   }
 }
