@@ -26,7 +26,7 @@ bundler (vite|rollup|rolldown|esbuild|bun)
 | -------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | Public factory | `src/index.ts`                                                                    | `unpluginFactory`, `preeval`, default export                                   |
 | Adapters       | `src/vite.ts`, `src/rollup.ts`, `src/rolldown.ts`, `src/esbuild.ts`, `src/bun.ts` | `create*Plugin(unpluginFactory)` one-liners                                    |
-| Options        | `src/types.ts`                                                                    | `Options`: `onFailure`, `imports`, `allowNode`, `include`, `exclude`           |
+|Options        |`src/types.ts`                                                                    |`Options`: `onFailure`, `rules`, `include`, `exclude`            |
 | Analyze        | `src/core/analyze/`                                                               | call/tag matching, dependency closures, evaluation plans, import cleanup plans |
 | Eval           | `src/core/eval.ts`                                                                | `evalExtractedModule` → `Map<localName, value>`                                |
 | Serialize      | `src/core/serialize.ts`                                                           | `isJsonValue` / `serializeJson`                                                |
@@ -38,7 +38,6 @@ bundler (vite|rollup|rolldown|esbuild|bun)
 
 - Temp file: `.preeval-<pid>-<time36>-<hex><ext>` written **next to** the source so relative imports resolve; always deleted in `finally`.
 - TypeScript/JSX: Bun evaluates them natively; Node delegates to a user-configured host loader such as `tsx`.
-- `allowNode` is trust-only (currently a no-op via `void options.allowNode`); no sandbox.
 - Never use `eval()`; always dynamic `import()`.
 - Extracted modules include only selected import specifiers, needed top-level const/function/class/enum declarations, synthetic targets, and optional build-time substitute imports.
 

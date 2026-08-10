@@ -171,9 +171,8 @@ function automaticEvaluationOrder(targets: readonly AutomaticCallTarget[]): Auto
 async function evaluatePlan(
   file: string,
   plan: EvaluationPlan,
-  allowNode: boolean | undefined,
 ): Promise<Map<string, unknown>> {
-  return evalExtractedModule(file, plan, { allowNode })
+  return evalExtractedModule(file, plan)
 }
 
 /**
@@ -225,7 +224,7 @@ export async function transformPreeval(
 
     let values: Map<string, unknown>
     try {
-      values = await evaluatePlan(file, plan, options.allowNode)
+      values = await evaluatePlan(file, plan)
     } catch (cause) {
       const msg = `[preeval] ${file}:${target.line}:${target.column + 1} ${label} failed: ${reasonOf(cause)}`
       reportFailure(policy, msg, ctx, cause)
@@ -292,7 +291,7 @@ export async function transformPreeval(
   if (markedPlan && markedPlan.targets.length > 0) {
     let values: Map<string, unknown> | null = null
     try {
-      values = await evaluatePlan(file, markedPlan, options.allowNode)
+      values = await evaluatePlan(file, markedPlan)
     } catch (cause) {
       const msg = `[preeval] ${reasonOf(cause)}`
       reportFailure(globalPolicy, msg, ctx, cause)

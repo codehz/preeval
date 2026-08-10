@@ -31,17 +31,13 @@ function prepareEvalSource(code: string, id: string): { content: string; ext: st
  * source file so relative imports resolve the same way they do for the source.
  * Synthetic exports (`target.evalExportName`) are read off the module namespace.
  *
- * `allowNode` is trust-only: nothing is injected and nothing is stripped.
- *
  * TypeScript and JSX are delegated to the host runtime. Bun handles them
  * natively; Node needs an externally configured loader such as tsx.
  */
 export async function evalExtractedModule(
   id: string,
   plan: EvaluationPlan,
-  options: { allowNode?: boolean },
 ): Promise<Map<string, unknown>> {
-  void options.allowNode
   if (plan.targets.length === 0) return new Map()
 
   const cut = id.search(/[?#]/)

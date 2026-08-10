@@ -27,11 +27,6 @@ export interface Options {
   onFailure?: FailurePolicy
   /** Imported ESM functions selected for automatic pre-evaluation. */
   rules?: PreevalRule[]
-  /**
-   * When true, evaluation may freely use Node/Bun APIs already in the host.
-   * When false (default), we do not inject extra Node helpers; there is NO sandbox.
-   */
-  allowNode?: boolean
   include?: FilterPattern
   exclude?: FilterPattern
 }

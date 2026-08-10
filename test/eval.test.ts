@@ -29,7 +29,7 @@ export const answer = 20 * 2
     writeFileSync(entry, code)
     const plan = analyzePreevalModule(code, entry)!
 
-    const values = await evalExtractedModule(entry, plan, {})
+    const values = await evalExtractedModule(entry, plan)
 
     expect(values.get('answer')).toBe(40)
   })
@@ -48,7 +48,7 @@ export const answer: number = 10 + 1
     writeFileSync(entry, code)
     const plan = analyzePreevalModule(code, entry)!
 
-    const values = await evalExtractedModule(entry, plan, {})
+    const values = await evalExtractedModule(entry, plan)
 
     expect(values.get('answer')).toBe(11)
   })
@@ -65,7 +65,7 @@ export const answer = local
     writeFileSync(entry, code)
     const plan = analyzePreevalModule(code, entry)!
 
-    const values = await evalExtractedModule(entry, plan, {})
+    const values = await evalExtractedModule(entry, plan)
 
     expect(values.get('local')).toBe(42)
   })

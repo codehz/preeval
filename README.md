@@ -144,7 +144,6 @@ await Bun.build({
 | ----------- | ------------------- | --------------------------------------------------------------------------------------------------- |
 | `onFailure` | `'warn'`            | Global `ignore \| warn \| error` policy for marked bindings and automatic calls.                    |
 | `rules`     | `[]`                | Explicit `match`, optional `evaluate`, optional `materialize`, and optional rule-level `onFailure`. |
-| `allowNode` | `false`             | Trust acknowledgment for Node/Bun APIs. Nothing is injected or stripped; there is no sandbox.       |
 | `include`   | `/\.[cm]?[jt]sx?$/` | File-id filter passed to the bundler.                                                               |
 | `exclude`   | `/node_modules/`    | File-id filter passed to the bundler.                                                               |
 
@@ -184,7 +183,6 @@ Rejected evaluator payloads: `undefined`, `NaN`, `±Infinity`, `bigint`, functio
 - **TypeScript**:
   - **Bun**: evaluates TS/TSX natively (including relative `.ts` imports).
   - **Node**: does not transpile TypeScript or JSX. Run the publish build with a host loader such as tsx (for example, `NODE_OPTIONS='--import tsx/esm' vite build`), or ensure the extracted entry and its dependencies are plain JS. The temporary entry keeps the original `.ts`/`.tsx`/`.jsx` extension so the loader can process the full relative dependency graph.
-- `allowNode` is an acknowledgment of trust, not isolation: extracted code can already use host APIs.
 - Hidden shared state from imported modules or ambient globals remains outside single-file static proof.
 - Static-analysis limits include dynamic code such as `eval(...)`/`new Function(...)`, and bundler-only virtual modules, path aliases, or package mappings that the adjacent temporary file cannot load. Failures follow `onFailure`.
 - `import.meta` in an extracted closure is refused because the temporary path would leak.
