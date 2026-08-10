@@ -27,7 +27,7 @@ bundler (vite|rollup|bun)
 | Public factory | `src/index.ts`                               | `unpluginFactory`, `preeval`, default export                                   |
 | Adapters       | `src/vite.ts`, `src/rollup.ts`, `src/bun.ts` | `create*Plugin(unpluginFactory)` one-liners                                    |
 | Options        | `src/types.ts`                               | `Options`: `onFailure`, `imports`, `allowNode`, `include`, `exclude`           |
-| Analyze        | `src/core/analyze.ts`                        | call/tag matching, dependency closures, evaluation plans, import cleanup plans |
+| Analyze        | `src/core/analyze/`                          | call/tag matching, dependency closures, evaluation plans, import cleanup plans |
 | Eval           | `src/core/eval.ts`                           | `evalExtractedModule` → `Map<localName, value>`                                |
 | Serialize      | `src/core/serialize.ts`                      | `isJsonValue` / `serializeJson`                                                |
 | Orchestrate    | `src/core/transform.ts`                      | `transformPreeval` + `TransformContext { warn, error }`                        |
@@ -46,7 +46,9 @@ bundler (vite|rollup|bun)
 
 ```
 src/           # library source (edit here)
-  core/        # analyze / eval / serialize / transform
+  core/
+    analyze/   # types, ast, decls, closure, extract, automatic, module, cleanup
+    eval.ts / serialize.ts / transform.ts
   index.ts     # unplugin factory + default export
   vite|rollup|bun.ts
 test/          # vitest; imports ../src/core/* directly (no dist)
@@ -97,7 +99,7 @@ Typecheck is implicit via editor/tsdown (`tsc` is `noEmit`). Format/lint: **oxfm
 | ----------------------- | --------------------------------------------------------------------------- |
 | `src/index.ts`          | Public unplugin factory, filters, transform hook                            |
 | `src/core/transform.ts` | Full pipeline + failure policy                                              |
-| `src/core/analyze.ts`   | Marker/call detection, closure plans, substitute extraction, import cleanup |
+| `src/core/analyze/`     | Marker/call detection, closure plans, substitute extraction, import cleanup |
 | `src/core/eval.ts`      | Bun vs Node prep, sucrase peer, temp-file lifecycle                         |
 | `src/core/serialize.ts` | JSON-superset whitelist                                                     |
 | `src/types.ts`          | Public `Options`                                                            |
