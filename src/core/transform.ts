@@ -62,7 +62,7 @@ function effectiveReplacements<T extends { start: number; end: number }>(
   replacements: readonly T[],
 ): T[] {
   const selected: T[] = []
-  for (const replacement of [...replacements].sort(
+  for (const replacement of [...replacements].toSorted(
     (a, b) => b.end - b.start - (a.end - a.start) || a.start - b.start,
   )) {
     if (
@@ -72,7 +72,7 @@ function effectiveReplacements<T extends { start: number; end: number }>(
     }
     selected.push(replacement)
   }
-  return selected.sort((a, b) => a.start - b.start)
+  return selected.toSorted((a, b) => a.start - b.start)
 }
 
 function renderAutomaticStatic(
@@ -161,10 +161,10 @@ function automaticEvaluationOrder(targets: readonly AutomaticCallTarget[]): Auto
 
   const ordered: AutomaticCallTarget[] = []
   const visit = (target: AutomaticCallTarget): void => {
-    for (const child of children.get(target)!.sort((a, b) => a.start - b.start)) visit(child)
+    for (const child of children.get(target)!.toSorted((a, b) => a.start - b.start)) visit(child)
     ordered.push(target)
   }
-  for (const root of roots.sort((a, b) => a.start - b.start)) visit(root)
+  for (const root of roots.toSorted((a, b) => a.start - b.start)) visit(root)
   return ordered
 }
 

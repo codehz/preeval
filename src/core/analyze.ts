@@ -778,7 +778,7 @@ function assertNoInterferingStatements(
   perTargetClosures: Map<string, Set<string>>,
 ): void {
   const programScope = programPath.scope
-  const targetStarts = targets.map((t) => assertNumber(t.stmt.start, 'target start'))
+  const targetStarts = targets.map((target) => assertNumber(target.stmt.start, 'target start'))
   const closureHasImports = [...closure].some((n) => localDecls.get(n)?.kind === 'import')
 
   // Non-closure hoistables: body effects matter only if a call site reaches them.
