@@ -181,10 +181,9 @@ Rejected evaluator payloads: `undefined`, `NaN`, `±Infinity`, `bigint`, functio
 - Successful automatic replacements remove their original import specifier only when the binding has no remaining runtime references. Evaluator imports exist only in temporary modules. Materializer imports are emitted only for successful surviving materialized sites and are deduplicated by exact source/export reference.
 - Automatic calls use macro semantics and execute in expression/source order. Non-materialized successful results may feed later static evaluation; materialized results are runtime boundaries. A successful marked initializer takes precedence over nested non-materialized automatic edits.
 - Interference checks for marked bindings are per remaining mark. A runtime-boundary-blocked mark does not prevent unrelated marks from succeeding. Never-called top-level function/class declarations are ignored unless a pre-target call site can reach them.
-- TypeScript:
+- **TypeScript**:
   - **Bun**: evaluates TS/TSX natively (including relative `.ts` imports).
-  - **Node**: the plugin runs `sucrase` on the extracted entry (optional `sucrase` peer). Relative TypeScript dependencies under Node need a host loader, or plain JS dependencies with explicit extensions.
-- Prefer one-shot publish builds. Imported dependency modules are cached by the host ESM loader for the process lifetime; watch-mode re-evaluation of shared graphs is not guaranteed.
+  - **Node**: does not transpile TypeScript or JSX. Run the publish build with a host loader such as tsx (for example, `NODE_OPTIONS='--import tsx/esm' vite build`), or ensure the extracted entry and its dependencies are plain JS. The temporary entry keeps the original `.ts`/`.tsx`/`.jsx` extension so the loader can process the full relative dependency graph.
 - `allowNode` is an acknowledgment of trust, not isolation: extracted code can already use host APIs.
 - Hidden shared state from imported modules or ambient globals remains outside single-file static proof.
 - Static-analysis limits include dynamic code such as `eval(...)`/`new Function(...)`, and bundler-only virtual modules, path aliases, or package mappings that the adjacent temporary file cannot load. Failures follow `onFailure`.

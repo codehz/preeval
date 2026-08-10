@@ -19,55 +19,8 @@ function tmpDir(): string {
   return dir
 }
 
-/** Force the Node prepare path (sucrase) even when the test runner is Bun. */
-const nodeRuntime = { isBun: false }
-
-describe('evalExtractedModule (Node path)', () => {
-  it('transpiles a .ts entry via sucrase and returns marked values', async () => {
-    const dir = tmpDir()
-    const entry = join(dir, 'entry.ts')
-    const code = `// @preeval
-export const answer: number = 40 + 2
-`
-    writeFileSync(entry, code)
-    const plan = analyzePreevalModule(code, entry)!
-
-    const values = await evalExtractedModule(entry, plan, {}, nodeRuntime)
-
-    expect(values.get('answer')).toBe(42)
-  })
-
-  it('strips type-only imports under Node', async () => {
-    const dir = tmpDir()
-    const entry = join(dir, 'entry.ts')
-    const code = `import type { Unused } from './missing.js'
-// @preeval
-export const n: number = 1 + 1
-`
-    writeFileSync(entry, code)
-    const plan = analyzePreevalModule(code, entry)!
-
-    const values = await evalExtractedModule(entry, plan, {}, nodeRuntime)
-
-    expect(values.get('n')).toBe(2)
-  })
-
-  it('transpiles enums used by marked bindings', async () => {
-    const dir = tmpDir()
-    const entry = join(dir, 'entry.ts')
-    const code = `enum E { A = 40 }
-// @preeval
-export const answer = E.A + 2
-`
-    writeFileSync(entry, code)
-    const plan = analyzePreevalModule(code, entry)!
-
-    const values = await evalExtractedModule(entry, plan, {}, nodeRuntime)
-
-    expect(values.get('answer')).toBe(42)
-  })
-
-  it('leaves plain .js unchanged under Node (no sucrase load required for syntax)', async () => {
+describe('evalExtractedModule (host runtime)', () => {
+  it('evaluates plain JS under Node without an internal transpiler', async () => {
     const dir = tmpDir()
     const entry = join(dir, 'entry.js')
     const code = `// @preeval
@@ -76,7 +29,7 @@ export const answer = 20 * 2
     writeFileSync(entry, code)
     const plan = analyzePreevalModule(code, entry)!
 
-    const values = await evalExtractedModule(entry, plan, {}, nodeRuntime)
+    const values = await evalExtractedModule(entry, plan, {})
 
     expect(values.get('answer')).toBe(40)
   })

@@ -37,7 +37,7 @@ bundler (vite|rollup|rolldown|esbuild|bun)
 **Eval notes**:
 
 - Temp file: `.preeval-<pid>-<time36>-<hex><ext>` written **next to** the source so relative imports resolve; always deleted in `finally`.
-- Bun: native TS/TSX; Node: optional peer `sucrase` transpiles **extracted entry only** → `.mjs`.
+- TypeScript/JSX: Bun evaluates them natively; Node delegates to a user-configured host loader such as `tsx`.
 - `allowNode` is trust-only (currently a no-op via `void options.allowNode`); no sandbox.
 - Never use `eval()`; always dynamic `import()`.
 - Extracted modules include only selected import specifiers, needed top-level const/function/class/enum declarations, synthetic targets, and optional build-time substitute imports.
@@ -81,7 +81,7 @@ Typecheck is implicit via editor/tsdown (`tsc` is `noEmit`). Format/lint: **oxfm
 - **Async**: only at the eval/dynamic-import boundary; analyze + serialize are sync.
 - **Errors**: wrap with `{ cause }`; user-facing strings start with `[preeval]`; route failures through `ignore | warn | error`.
 - **Context injection**: pass a minimal `TransformContext { warn, error }` — no DI container, no global state.
-- **Filters**: prefer named regex consts (`DEFAULT_INCLUDE`, `MARKER`, `TS_FILE`).
+- **Filters**: prefer named regex consts (`DEFAULT_INCLUDE`, `MARKER`, `HOST_LOADER_FILE`).
 - **Adapters**: keep bundler entry files as one-liner unplugin wrappers; put logic in `src/core/` or the factory.
 - **Strict TS**: `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`; unused-locals/params intentionally off.
 - **Marker / automatic scope rules** (do not loosen casually):
@@ -95,19 +95,19 @@ Typecheck is implicit via editor/tsdown (`tsc` is `noEmit`). Format/lint: **oxfm
 
 ## Important Files
 
-| File                    | Why it matters                                                              |
-| ----------------------- | --------------------------------------------------------------------------- |
-| `src/index.ts`          | Public unplugin factory, filters, transform hook                            |
-| `src/core/transform.ts` | Full pipeline + failure policy                                              |
-| `src/core/analyze/`     | Marker/call detection, closure plans, substitute extraction, import cleanup |
-| `src/core/eval.ts`      | Bun vs Node prep, sucrase peer, temp-file lifecycle                         |
-| `src/core/serialize.ts` | JSON-superset whitelist                                                     |
-| `src/types.ts`          | Public `Options`                                                            |
-| `package.json`          | exports map (`.`, `./vite`, `./rollup`, `./rolldown`, `./esbuild`, `./bun`) |
-| `tsdown.config.ts`      | 6 entries; `fixedExtension: false` → `.js`/`.d.ts`                          |
-| `.oxfmtrc.json`         | oxfmt: single quotes, no semis, width 100                                   |
-| `.oxlintrc.json`        | oxlint: correctness/suspicious + TS/import/node/vitest                      |
-| `README.md`             | User-facing rules, options, value domain                                    |
+| File                    | Why it matters                                                                 |
+| ----------------------- | ------------------------------------------------------------------------------ |
+| `src/index.ts`          | Public unplugin factory, filters, transform hook                               |
+| `src/core/transform.ts` | Full pipeline + failure policy                                                 |
+| `src/core/analyze/`     | Marker/call detection, closure plans, substitute extraction, import cleanup    |
+| `src/core/eval.ts`      | Host-runtime evaluation, temp-file lifecycle, and loader-preserving extensions |
+| `src/core/serialize.ts` | JSON-superset whitelist                                                        |
+| `src/types.ts`          | Public `Options`                                                               |
+| `package.json`          | exports map (`.`, `./vite`, `./rollup`, `./rolldown`, `./esbuild`, `./bun`)    |
+| `tsdown.config.ts`      | 6 entries; `fixedExtension: false` → `.js`/`.d.ts`                             |
+| `.oxfmtrc.json`         | oxfmt: single quotes, no semis, width 100                                      |
+| `.oxlintrc.json`        | oxlint: correctness/suspicious + TS/import/node/vitest                         |
+| `README.md`             | User-facing rules, options, value domain                                       |
 
 ## Runtime/Tooling Preferences
 
@@ -122,7 +122,7 @@ Typecheck is implicit via editor/tsdown (`tsc` is `noEmit`). Format/lint: **oxfm
 | DTS                        | `resolver: 'tsc'`, `deps.dts.neverBundle: true`, `skipLibCheck`                           |
 | Plugin framework           | **unplugin** v3                                                                           |
 | Parsing / rewrite          | `@babel/parser` + `@babel/traverse` + `@babel/generator` + `@babel/types`, `magic-string` |
-| Optional peer              | `sucrase` ^3 (Node TS eval only)                                                          |
+| Node TypeScript loader     | User-configured host loader such as `tsx`; no internal transpiler                         |
 
 Do not introduce CJS dual-package, webpack adapters, or sandboxed eval without an intentional design change.
 
@@ -133,7 +133,7 @@ Do not introduce CJS dual-package, webpack adapters, or sandboxed eval without a
 - **Import style**: tests hit `../src/core/*` source; no build required.
   - `test/analyze.test.ts` — unit, marker + closure extraction
   - `test/serialize.test.ts` — `isJsonValue` / `serializeJson` accept/reject tables
-  - `test/eval.test.ts` — Node-path force via `runtime.isBun: false` (sucrase); Bun default path
+  - `test/eval.test.ts` — host-runtime evaluation, Bun-native TS path, and temp-file lifecycle
   - `test/transform.test.ts` — integration: real temp dirs, FS writes, dynamic imports; stub `TransformContext`
   - `test/index.test.ts` — option validation and marker/automatic filter selection
   - `test/adapters.test.ts` — rolldown/esbuild adapter factories and host smoke builds

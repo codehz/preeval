@@ -4,81 +4,24 @@ import { dirname, extname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { EvaluationPlan, PreevalTarget } from './analyze'
 
-/** Source extensions that may contain TypeScript syntax. */
-const TS_FILE = /\.(?:[cm]?ts|tsx)$/
-
-/** Source extensions that may contain JSX (but not necessarily TypeScript). */
-const JSX_FILE = /\.(?:jsx|tsx)$/
-
-/** Optional overrides for unit tests (force Node path under Bun). */
-export type EvalRuntime = {
-  /** When set, skips `globalThis.Bun` detection. */
-  isBun?: boolean
-}
-
-function detectBun(): boolean {
-  return typeof (globalThis as { Bun?: unknown }).Bun !== 'undefined'
-}
+/** Source extensions that require a host TypeScript/JSX loader. */
+const HOST_LOADER_FILE = /\.(?:[cm]?ts|tsx|jsx)$/
 
 function tempExtFor(id: string): string {
   const ext = extname(id).toLowerCase()
-  if (ext === '.tsx' || ext === '.jsx' || ext === '.mts' || ext === '.cts' || ext === '.ts') {
-    return ext
-  }
-  return '.mjs'
+  return HOST_LOADER_FILE.test(ext) ? ext : '.mjs'
 }
 
 /**
  * Prepare source for evaluation.
- * - Bun: keep original source/extension (native TS/TSX/JSX loaders).
- * - Node + TS/TSX: transpile entry via optional `sucrase` peer → `.mjs`.
- * - Node + plain JS/JSX: write as `.mjs`.
  *
- * Dynamic import of `sucrase` is intentional: it is an optional peer and
- * must not be required when evaluating plain JS.
+ * The extracted module keeps its TypeScript/JSX extension so a host loader can
+ * transform it and any relative TypeScript dependencies. Node intentionally
+ * does not transpile source; run the publish build with a loader such as tsx
+ * (for example, `NODE_OPTIONS='--import tsx/esm' ...`) or use plain JS.
  */
-async function prepareEvalSource(
-  code: string,
-  id: string,
-  isBun: boolean,
-): Promise<{ content: string; ext: string }> {
-  if (isBun) {
-    return { content: code, ext: tempExtFor(id) }
-  }
-
-  if (!TS_FILE.test(id)) {
-    return { content: code, ext: '.mjs' }
-  }
-
-  let transform: typeof import('sucrase').transform
-  try {
-    ;({ transform } = await import('sucrase'))
-  } catch {
-    throw new Error(
-      `preeval: evaluating TypeScript (${id}) under Node requires the optional "sucrase" peer dependency`,
-    )
-  }
-
-  const isTsx = JSX_FILE.test(id)
-  try {
-    const { code: outputText } = transform(code, {
-      transforms: isTsx ? ['typescript', 'jsx'] : ['typescript'],
-      filePath: id,
-      disableESTransforms: true,
-      ...(isTsx
-        ? {
-            jsxRuntime: 'automatic' as const,
-            production: true,
-          }
-        : {}),
-    })
-    return { content: outputText, ext: '.mjs' }
-  } catch (cause) {
-    throw new Error(
-      `Failed to transpile ${id}: ${cause instanceof Error ? cause.message : String(cause)}`,
-      { cause },
-    )
-  }
+function prepareEvalSource(code: string, id: string): { content: string; ext: string } {
+  return { content: code, ext: tempExtFor(id) }
 }
 
 /**
@@ -90,25 +33,20 @@ async function prepareEvalSource(
  *
  * `allowNode` is trust-only: nothing is injected and nothing is stripped.
  *
- * Note: only the extracted entry is rewritten/transpiled. Relative TypeScript
- * dependencies under Node require a host loader (or pure JS deps).
- *
- * `runtime.isBun` is for tests: force the Node prepare path even when the
- * process is Bun (default detects `globalThis.Bun`).
+ * TypeScript and JSX are delegated to the host runtime. Bun handles them
+ * natively; Node needs an externally configured loader such as tsx.
  */
 export async function evalExtractedModule(
   id: string,
   plan: EvaluationPlan,
   options: { allowNode?: boolean },
-  runtime?: EvalRuntime,
 ): Promise<Map<string, unknown>> {
   void options.allowNode
   if (plan.targets.length === 0) return new Map()
 
   const cut = id.search(/[?#]/)
   const file = cut === -1 ? id : id.slice(0, cut)
-  const isBun = runtime?.isBun ?? detectBun()
-  const prepared = await prepareEvalSource(plan.code, file, isBun)
+  const prepared = prepareEvalSource(plan.code, file)
   const tmp = join(
     dirname(file),
     `.preeval-${process.pid}-${Date.now().toString(36)}-${randomBytes(4).toString('hex')}${prepared.ext}`,
