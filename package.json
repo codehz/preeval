@@ -1,6 +1,6 @@
 {
   "name": "@codehz/preeval",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Publish-build pre-evaluation of imported ESM calls with optional runtime materialization",
   "keywords": [
     "build",
