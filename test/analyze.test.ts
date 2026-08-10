@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { analyzePreevalModule, findAutomaticPreevalCalls } from '../src/core/analyze'
+import { createSpecifierMatcher } from '../src/core/resolve'
 
 /** Resolve the exact init span of `expr` inside `code`. */
 function spanOf(code: string, expr: string): { initStart: number; initEnd: number } {
@@ -416,10 +417,32 @@ import('pkg').then((mod) => mod.fn())
     expect(findAutomaticPreevalCalls(code, [{ match: { from: 'pkg', import: 'fn' } }])).toEqual([])
   })
 
-  it('matches source specifiers exactly and does not follow barrels', () => {
+  it('matches source specifiers exactly without a host resolver and does not follow barrels', () => {
     const code = `import { fn } from './barrel.js'\nfn()\n`
     expect(
       findAutomaticPreevalCalls(code, [{ match: { from: './impl.js', import: 'fn' } }]),
     ).toEqual([])
+  })
+
+  it('matches when a SpecifierMatcher equates different source strings', async () => {
+    const code = `import { fn } from './barrel.js'\nfn()\n`
+    const matcher = await createSpecifierMatcher({
+      importSources: ['./barrel.js'],
+      ruleFroms: ['./impl.js'],
+      file: '/proj/src/entry.js',
+      root: '/proj',
+      resolve: async (source) => {
+        if (source === './barrel.js' || source === './impl.js') return '/proj/src/impl.js'
+        return null
+      },
+    })
+    const calls = findAutomaticPreevalCalls(
+      code,
+      [{ match: { from: './impl.js', import: 'fn' } }],
+      '/proj/src/entry.js',
+      matcher,
+    )
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.rule.match.from).toBe('./impl.js')
   })
 })

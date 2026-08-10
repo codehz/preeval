@@ -13,11 +13,14 @@ import {
   type SourceRange,
 } from './analyze'
 import { evalExtractedModule } from './eval'
+import { collectModuleImportSources, createSpecifierMatcher, type ModuleResolve } from './resolve'
 import { serializeJson } from './serialize'
 
 export interface TransformContext {
   warn: (msg: string) => void
   error: (msg: string) => void
+  /** Host module resolver used for rule `match.from` identity. */
+  resolve?: ModuleResolve
 }
 
 interface Replacement {
@@ -168,10 +171,7 @@ function automaticEvaluationOrder(targets: readonly AutomaticCallTarget[]): Auto
   return ordered
 }
 
-async function evaluatePlan(
-  file: string,
-  plan: EvaluationPlan,
-): Promise<Map<string, unknown>> {
+async function evaluatePlan(file: string, plan: EvaluationPlan): Promise<Map<string, unknown>> {
   return evalExtractedModule(file, plan)
 }
 
@@ -192,7 +192,14 @@ export async function transformPreeval(
   const materializerLocals = allocateMaterializerLocals(code, rules, file)
   const originalMarked = findMarkedPreevalTargets(code, file)
   const originalMarkedByName = new Map(originalMarked.map((target) => [target.name, target]))
-  const automaticTargets = findAutomaticPreevalCalls(code, rules, file)
+  const specifierMatcher = await createSpecifierMatcher({
+    importSources: collectModuleImportSources(code, file),
+    ruleFroms: rules.map((rule) => rule.match.from),
+    file,
+    root: options.root ?? process.cwd(),
+    resolve: ctx.resolve,
+  })
+  const automaticTargets = findAutomaticPreevalCalls(code, rules, file, specifierMatcher)
   const automaticReplacements: AutomaticReplacement[] = []
   const failedAutomatic = new Set<AutomaticCallTarget>()
   const successfulBindings = new Set<string>()
@@ -214,6 +221,7 @@ export async function transformPreeval(
     try {
       plan = analyzeAutomaticPreevalCall(intermediate.code, currentStart, target.rule, file, {
         runtimeBoundaries: intermediate.runtimeBoundaries,
+        specifierMatcher,
       })
     } catch (cause) {
       const msg = `[preeval] ${file}:${target.line}:${target.column + 1} ${label} failed: ${reasonOf(cause)}`

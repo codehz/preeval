@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -81,5 +81,58 @@ describe('bundler adapters', () => {
     const code = readFileSync(outfile, 'utf8')
     expect(code).toContain('42')
     expect(code).not.toContain('40 + 2')
+  })
+
+  it('matches project-relative rule.from through rolldown host resolve', async () => {
+    const dir = tmpDir()
+    const nested = join(dir, 'nested')
+    mkdirSync(nested)
+    writeFileSync(join(dir, 'helper.js'), `export const named = (x) => x * 2\n`)
+    const entry = join(nested, 'entry.js')
+    writeFileSync(entry, `import { named } from '../helper.js'\nexport const value = named(21)\n`)
+
+    const result = await rolldownBuild({
+      input: entry,
+      plugins: [
+        createRolldownPreeval({
+          root: dir,
+          rules: [{ match: { from: './helper.js', import: 'named' } }],
+        }),
+      ],
+      write: false,
+    })
+
+    const code = result.output.map((chunk) => ('code' in chunk ? chunk.code : '')).join('\n')
+    expect(code).toContain('42')
+    expect(code).not.toContain('named(21)')
+  })
+
+  it('matches project-relative rule.from through esbuild host resolve', async () => {
+    const dir = tmpDir()
+    const nested = join(dir, 'nested')
+    mkdirSync(nested)
+    writeFileSync(join(dir, 'helper.js'), `export const named = (x) => x * 2\n`)
+    const entry = join(nested, 'entry.js')
+    const outfile = join(dir, 'out.js')
+    writeFileSync(entry, `import { named } from '../helper.js'\nexport const value = named(21)\n`)
+
+    await esbuildBuild({
+      entryPoints: [entry],
+      bundle: true,
+      format: 'esm',
+      outfile,
+      plugins: [
+        createEsbuildPreeval({
+          root: dir,
+          rules: [{ match: { from: './helper.js', import: 'named' } }],
+        }),
+      ],
+      write: true,
+      logLevel: 'silent',
+    })
+
+    const code = readFileSync(outfile, 'utf8')
+    expect(code).toContain('42')
+    expect(code).not.toContain('named(21)')
   })
 })

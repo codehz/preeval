@@ -16,7 +16,7 @@ Single pipeline, shared unplugin factory, thin bundler adapters.
 bundler (vite|rollup|rolldown|esbuild|bun)
   → unpluginFactory (src/index.ts)  // marker fast path unless automatic imports exist
     → transformPreeval (src/core/transform.ts)
-        1. find/analyze automatic imported calls and tagged templates
+        1. host-resolve rule match.from + import sources; find automatic calls/tags
         2. eval + serialize sites in macro order
         3. analyze/eval marked bindings against intermediate constants
         4. apply non-overlapping replacements + dead import cleanup
@@ -26,11 +26,12 @@ bundler (vite|rollup|rolldown|esbuild|bun)
 | -------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | Public factory | `src/index.ts`                                                                    | `unpluginFactory`, `preeval`, default export                                   |
 | Adapters       | `src/vite.ts`, `src/rollup.ts`, `src/rolldown.ts`, `src/esbuild.ts`, `src/bun.ts` | `create*Plugin(unpluginFactory)` one-liners                                    |
-|Options        |`src/types.ts`                                                                    |`Options`: `onFailure`, `rules`, `include`, `exclude`            |
+| Options        | `src/types.ts`                                                                    | `Options`: `onFailure`, `rules`, `root`, `include`, `exclude`                  |
 | Analyze        | `src/core/analyze/`                                                               | call/tag matching, dependency closures, evaluation plans, import cleanup plans |
+| Resolve        | `src/core/resolve.ts`                                                             | host resolve binding + `SpecifierMatcher` for rule `match.from` identity       |
 | Eval           | `src/core/eval.ts`                                                                | `evalExtractedModule` → `Map<localName, value>`                                |
 | Serialize      | `src/core/serialize.ts`                                                           | `isJsonValue` / `serializeJson`                                                |
-| Orchestrate    | `src/core/transform.ts`                                                           | `transformPreeval` + `TransformContext { warn, error }`                        |
+| Orchestrate    | `src/core/transform.ts`                                                           | `transformPreeval` + `TransformContext { warn, error, resolve? }`              |
 
 **Failure policy**: global `onFailure` defaults to `warn`; `ignore` preserves silently, `warn` preserves with diagnostics, and `error` aborts through `ctx.error`. Automatic rules may override the policy. Configuration errors always throw. `strict` was removed.
 
@@ -47,7 +48,7 @@ bundler (vite|rollup|rolldown|esbuild|bun)
 src/           # library source (edit here)
   core/
     analyze/   # types, ast, decls, closure, extract, automatic, module, cleanup
-    eval.ts / serialize.ts / transform.ts
+    resolve.ts / eval.ts / serialize.ts / transform.ts
   index.ts     # unplugin factory + default export
   vite|rollup|rolldown|esbuild|bun.ts
 test/          # vitest; imports ../src/core/* directly (no dist)
@@ -77,20 +78,21 @@ Typecheck is implicit via editor/tsdown (`tsc` is `noEmit`). Format/lint: **oxfm
 
 - **Language**: TypeScript, ESM (`"type": "module"`), `import type` required (`verbatimModuleSyntax`).
 - **Naming**: `camelCase` functions/vars; `PascalCase` types; core exports `verbNoun` (`analyzePreevalModule`, `evalExtractedModule`, `transformPreeval`).
-- **Async**: only at the eval/dynamic-import boundary; analyze + serialize are sync.
+- **Async**: only at the eval/dynamic-import boundary and host module resolve for rule matching; analyze + serialize stay sync once a `SpecifierMatcher` is ready.
 - **Errors**: wrap with `{ cause }`; user-facing strings start with `[preeval]`; route failures through `ignore | warn | error`.
-- **Context injection**: pass a minimal `TransformContext { warn, error }` — no DI container, no global state.
+- **Context injection**: pass a minimal `TransformContext { warn, error, resolve? }` — no DI container, no global state.
 - **Filters**: prefer named regex consts (`DEFAULT_INCLUDE`, `MARKER`, `HOST_LOADER_FILE`).
 - **Adapters**: keep bundler entry files as one-liner unplugin wrappers; put logic in `src/core/` or the factory.
 - **Strict TS**: `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`; unused-locals/params intentionally off.
 - **Marker / automatic scope rules** (do not loosen casually):
   - markers remain exact top-level single-declarator `const` comments
-  - automatic calls/tags match exact source + export binding identity only
+  - automatic calls/tags match by host-resolved module identity + export binding (exact source string when no host resolve)
   - direct named/default/import-alias calls/tags and static namespace properties only (`fn()`, `fn\`...\``, `ns.fn()`, `ns.fn\`...\``)
   - stable module deps only: import / const / function / class / enum
   - reject local bindings, `let`/`var`, reassignment, `this`/`arguments`/`super`, `new.target`, and `import.meta`
   - synchronous JSON-superset results only; no sandbox or purity checking
   - no whole-module fallback when extraction cannot be proven
+  - no following re-exports/barrels solely because resolve landed on the same package entry unless the import source itself resolves to the rule target
 
 ## Important Files
 

@@ -1,7 +1,7 @@
 import { createUnplugin, type TransformResult, type UnpluginFactory } from 'unplugin'
 import type { FailurePolicy, ImportedFunctionRef, Options } from './types'
 import { transformPreeval } from './core/transform'
-
+import { bindHostResolve, type HostResolveContext } from './core/resolve'
 export type { FailurePolicy, ImportedFunctionRef, Options, PreevalRule } from './types'
 
 /**
@@ -108,7 +108,27 @@ export const unpluginFactory: UnpluginFactory<Options | undefined> = (options = 
         ...(options.rules?.length ? {} : { code: { include: MARKER } }),
       },
       async handler(code, id): Promise<TransformResult> {
-        const result = await transformPreeval(code, id, options, this)
+        const hostCtx: HostResolveContext = {
+          resolve:
+            'resolve' in this && typeof this.resolve === 'function'
+              ? (this.resolve as HostResolveContext['resolve'])!.bind(this)
+              : undefined,
+          getNativeBuildContext:
+            'getNativeBuildContext' in this && typeof this.getNativeBuildContext === 'function'
+              ? (this.getNativeBuildContext as HostResolveContext['getNativeBuildContext'])!.bind(
+                  this,
+                )
+              : undefined,
+        }
+        const result = await transformPreeval(code, id, options, {
+          warn: (msg) => {
+            this.warn(msg)
+          },
+          error: (msg) => {
+            this.error(msg)
+          },
+          resolve: bindHostResolve(hostCtx),
+        })
         if (!result) return null
         return { code: result.code, map: result.map as PreevalSourceMap }
       },

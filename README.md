@@ -68,7 +68,7 @@ export default defineConfig({
 })
 ```
 
-`match` selects the original binding by exact source specifier and ESM export name. Matching is binding-aware and supports named imports, default imports, import aliases, and static namespace properties (`ns.fn()` / `ns['fn']()`, including the same forms as tagged-template tags). Direct calls and tagged templates are macro sites. Local aliases, re-exports/barrels, CommonJS `require`, dynamic imports, bundler-resolved IDs, and computed property expressions are not followed.
+`match` selects the original binding by **host-resolved module identity** and ESM export name. When the bundler exposes a resolver (Rollup/Vite/Rolldown `this.resolve`, esbuild `build.resolve`, Bun `Bun.resolveSync`), `match.from` is resolved against `root` (default `process.cwd()`) and each import source against the current file; equal resolved ids match even when the written specifiers differ (`./x` vs `../lib/x.js`, aliases, extension resolution). Without a host resolver, matching falls back to exact source-string equality. Matching is binding-aware and supports named imports, default imports, import aliases, and static namespace properties (`ns.fn()` / `ns['fn']()`, including the same forms as tagged-template tags). Direct calls and tagged templates are macro sites. Local aliases, re-exports/barrels, CommonJS `require`, dynamic imports, and computed property expressions are not followed.
 
 `evaluate` selects the build-time callee/tag and defaults to `match`. The evaluator receives the original call arguments or tagged-template inputs. It must return a synchronous JSON-superset payload. The evaluator import exists only in the temporary evaluation module and is never emitted.
 
@@ -144,6 +144,7 @@ await Bun.build({
 | ----------- | ------------------- | --------------------------------------------------------------------------------------------------- |
 | `onFailure` | `'warn'`            | Global `ignore \| warn \| error` policy for marked bindings and automatic calls.                    |
 | `rules`     | `[]`                | Explicit `match`, optional `evaluate`, optional `materialize`, and optional rule-level `onFailure`. |
+| `root`      | `process.cwd()`     | Base directory for resolving relative `rules[].match.from` values under host resolve.               |
 | `include`   | `/\.[cm]?[jt]sx?$/` | File-id filter passed to the bundler.                                                               |
 | `exclude`   | `/node_modules/`    | File-id filter passed to the bundler.                                                               |
 
@@ -176,7 +177,7 @@ Rejected evaluator payloads: `undefined`, `NaN`, `±Infinity`, `bigint`, functio
 - Evaluation extracts the same-file lexical dependency closure: imports and stable module-level `const`, function, class, and enum declarations. Unrelated top-level statements and side-effect-only imports are not executed.
 - Calls, constructors, getters, imported-module initialization, and other side effects inside the extracted closure are allowed. Configuring a rule is an explicit trust decision; there is no purity analysis or sandbox.
 - Only synchronous results are supported. Promise/thenable results are failures and are never implicitly awaited.
-- Imported modules load fully. There is no recursive project-graph trimming, persistent build cache, resolved-ID matching, or bundler-resolution emulation.
+- Imported modules load fully. There is no recursive project-graph trimming or persistent build cache. Rule `match` uses the host resolver when available (otherwise exact specifier strings). Evaluation still loads modules via adjacent temporary files and does not re-run the bundler graph.
 - Successful automatic replacements remove their original import specifier only when the binding has no remaining runtime references. Evaluator imports exist only in temporary modules. Materializer imports are emitted only for successful surviving materialized sites and are deduplicated by exact source/export reference.
 - Automatic calls use macro semantics and execute in expression/source order. Non-materialized successful results may feed later static evaluation; materialized results are runtime boundaries. A successful marked initializer takes precedence over nested non-materialized automatic edits.
 - Interference checks for marked bindings are per remaining mark. A runtime-boundary-blocked mark does not prevent unrelated marks from succeeding. Never-called top-level function/class declarations are ignored unless a pre-target call site can reach them.
@@ -190,6 +191,6 @@ Rejected evaluator payloads: `undefined`, `NaN`, `±Infinity`, `bigint`, functio
 
 ## How it works
 
-1. **Analyze** — Babel finds configured direct import calls, tagged templates, and marked top-level constants, verifies exact binding identity, and builds stable same-file dependency closures.
+1. **Analyze** — Babel finds configured direct import calls, tagged templates, and marked top-level constants, verifies binding identity (host-resolved `match.from` when possible), and builds stable same-file dependency closures.
 2. **Extract + evaluate** — automatic sites execute children-first with `evaluate ?? match`; marked bindings then evaluate against successful non-runtime intermediate constants. Temporary ESM files are written next to the source, dynamically imported, and removed in `finally`.
 3. **Serialize + emit** — evaluator payloads become literals. Rules with `materialize` emit a hygienic runtime import and `materialize(<literal>)`; other successes emit the literal directly. MagicString applies one non-overlapping final edit set and removes dead matched import bindings.

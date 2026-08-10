@@ -1,3 +1,4 @@
+import { EXACT_SPECIFIER_MATCHER, type SpecifierMatcher } from '../resolve'
 import type { Binding, NodePath, Scope } from '@babel/traverse'
 import * as t from '@babel/types'
 import type { PreevalRule } from '../../types'
@@ -34,6 +35,7 @@ function matchImportedCallee(
   callee: t.Node,
   scope: Scope,
   rules: readonly PreevalRule[],
+  specifierMatcher: SpecifierMatcher,
 ): MatchedImportedCall | null {
   let localName: string
   let exportName: string
@@ -73,7 +75,8 @@ function matchImportedCallee(
 
   const rule = rules.find(
     (candidate) =>
-      candidate.match.from === decl.source.value && candidate.match.import === exportName,
+      specifierMatcher.matchesSource(decl.source.value, candidate.match.from) &&
+      candidate.match.import === exportName,
   )
   return rule ? { rule, localName } : null
 }
@@ -105,6 +108,7 @@ export function findAutomaticPreevalCalls(
   code: string,
   rules: readonly PreevalRule[],
   filename?: string,
+  specifierMatcher: SpecifierMatcher = EXACT_SPECIFIER_MATCHER,
 ): AutomaticCallTarget[] {
   if (rules.length === 0) return []
   const file = parseModule(code, filename)
@@ -114,19 +118,18 @@ export function findAutomaticPreevalCalls(
 
   traverse(file, {
     CallExpression(path) {
-      const matched = matchImportedCallee(path.node.callee, path.scope, rules)
+      const matched = matchImportedCallee(path.node.callee, path.scope, rules, specifierMatcher)
       if (matched == null) return
       pushAutomaticTarget(path, matched, marked, targets)
     },
     TaggedTemplateExpression(path) {
-      const matched = matchImportedCallee(path.node.tag, path.scope, rules)
+      const matched = matchImportedCallee(path.node.tag, path.scope, rules, specifierMatcher)
       if (matched == null) return
       pushAutomaticTarget(path, matched, marked, targets)
     },
   })
 
-  targets.sort((a, b) => a.start - b.start || a.end - b.end)
-  return targets
+  return targets.toSorted((a, b) => a.start - b.start || a.end - b.end)
 }
 
 function isBindingOwnedByPayload(binding: Binding, payloadPath: NodePath): boolean {
@@ -218,20 +221,24 @@ export function analyzeAutomaticPreevalCall(
   targetStart: number,
   rule: PreevalRule,
   filename?: string,
-  options?: { runtimeBoundaries?: readonly SourceRange[] },
+  options?: {
+    runtimeBoundaries?: readonly SourceRange[]
+    specifierMatcher?: SpecifierMatcher
+  },
 ): EvaluationPlan {
   const file = parseModule(code, filename)
   if (file == null) throw new Error('preeval: failed to parse module for automatic call')
   const programPath = resolveProgramPath(file)
   const programScope = programPath.scope
   const localDecls = indexLocalDecls(programPath)
+  const specifierMatcher = options?.specifierMatcher ?? EXACT_SPECIFIER_MATCHER
   let targetPath: NodePath<t.CallExpression | t.TaggedTemplateExpression> | null = null
   let matched: MatchedImportedCall | null = null
 
   programPath.traverse({
     CallExpression(path) {
       if (path.node.start !== targetStart) return
-      const candidate = matchImportedCallee(path.node.callee, path.scope, [rule])
+      const candidate = matchImportedCallee(path.node.callee, path.scope, [rule], specifierMatcher)
       if (candidate == null) return
       targetPath = path
       matched = candidate
@@ -239,7 +246,7 @@ export function analyzeAutomaticPreevalCall(
     },
     TaggedTemplateExpression(path) {
       if (path.node.start !== targetStart) return
-      const candidate = matchImportedCallee(path.node.tag, path.scope, [rule])
+      const candidate = matchImportedCallee(path.node.tag, path.scope, [rule], specifierMatcher)
       if (candidate == null) return
       targetPath = path
       matched = candidate

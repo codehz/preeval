@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -523,6 +523,35 @@ export const values = [def(1), named(2), alias(3), ns.named(4), ns['named'](5)]
     expect(res).not.toBeNull()
     expect(res!.code).toContain(`export const values = ["d1", "n2", "n3", "n4", "n5"]`)
     expect(res!.code).not.toContain("from './helper.js'")
+    expect(warns).toEqual([])
+  })
+
+  it('matches relative rule.from via host resolve identity', async () => {
+    const dir = tmpDir()
+    const nested = join(dir, 'nested')
+    writeFileSync(join(dir, 'helper.js'), `export const named = (x) => x * 2\n`)
+    mkdirSync(nested)
+    const entry = join(nested, 'entry.js')
+    const code = `import { named } from '../helper.js'\nexport const value = named(21)\n`
+    writeFileSync(entry, code)
+    const { ctx, warns } = makeCtx()
+    ctx.resolve = async (source) => {
+      if (source === './helper.js' || source === '../helper.js') {
+        return join(dir, 'helper.js')
+      }
+      return null
+    }
+
+    const res = await transformPreeval(
+      code,
+      entry,
+      { root: dir, rules: [{ match: { from: './helper.js', import: 'named' } }] },
+      ctx,
+    )
+
+    expect(res).not.toBeNull()
+    expect(res!.code).toContain('export const value = 42')
+    expect(res!.code).not.toContain('named(21)')
     expect(warns).toEqual([])
   })
 
