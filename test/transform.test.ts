@@ -489,7 +489,9 @@ export { answer }
     writeFileSync(entry, code)
     const { ctx, warns } = makeCtx()
 
-    await expect(transformPreeval(code, entry, { onFailure: 'error' }, ctx)).rejects.toThrow(/import\.meta/)
+    await expect(transformPreeval(code, entry, { onFailure: 'error' }, ctx)).rejects.toThrow(
+      /import\.meta/,
+    )
     expect(warns).toHaveLength(1)
     expect(warns[0]).toMatch(/^ERR:/)
   })
@@ -653,10 +655,7 @@ if (true) {
 
   it('rejects special context dependencies inside callback arguments', async () => {
     const dir = tmpDir()
-    writeFileSync(
-      join(dir, 'helper.js'),
-      `export const invoke = (callback) => callback()\n`,
-    )
+    writeFileSync(join(dir, 'helper.js'), `export const invoke = (callback) => callback()\n`)
     const entry = join(dir, 'entry.js')
     const code = `import { invoke } from './helper.js'
 export function contexts() {
@@ -748,7 +747,10 @@ class Child extends Base { read() { return named(super.value) } }
 
   it('uses alternate evaluators only in the temporary evaluation module', async () => {
     const dir = tmpDir()
-    writeFileSync(join(dir, 'runtime.js'), `throw new Error('runtime module initialized')\nexport const compile = () => 0\n`)
+    writeFileSync(
+      join(dir, 'runtime.js'),
+      `throw new Error('runtime module initialized')\nexport const compile = () => 0\n`,
+    )
     writeFileSync(join(dir, 'pure.js'), `export const compilePure = (x) => ({ value: x })\n`)
     const entry = join(dir, 'entry.js')
     const code = `import { compile } from './runtime.js'
@@ -757,10 +759,19 @@ export const output = compile('ok')
     writeFileSync(entry, code)
     const { ctx, warns } = makeCtx()
 
-    const res = await transformPreeval(code, entry, { rules: [{
-      match: { from: './runtime.js', import: 'compile' },
-      evaluate: { from: './pure.js', import: 'compilePure' },
-    }] }, ctx)
+    const res = await transformPreeval(
+      code,
+      entry,
+      {
+        rules: [
+          {
+            match: { from: './runtime.js', import: 'compile' },
+            evaluate: { from: './pure.js', import: 'compilePure' },
+          },
+        ],
+      },
+      ctx,
+    )
 
     expect(res!.code).toContain('export const output = {"value":"ok"}')
     expect(res!.code).not.toContain('runtime.js')
@@ -803,7 +814,16 @@ export const values = [good(), boom(), bad()]
     writeFileSync(entry, code)
     const { ctx, warns } = makeCtx()
 
-    const res = await transformPreeval(code, entry, { rules: ['good', 'boom', 'bad'].map((name) => ({ match: { from: './helper.js', import: name } })) }, ctx)
+    const res = await transformPreeval(
+      code,
+      entry,
+      {
+        rules: ['good', 'boom', 'bad'].map((name) => ({
+          match: { from: './helper.js', import: name },
+        })),
+      },
+      ctx,
+    )
 
     expect(res!.code).toContain('export const values = [42, boom(), bad()]')
     expect(res!.code).toContain('boom')
@@ -822,15 +842,39 @@ export const values = [good(), boom(), bad()]
     writeFileSync(entry, code)
 
     const ignored = makeCtx()
-    expect(await transformPreeval(code, entry, { onFailure: 'ignore', rules: [{ match: { from: './helper.js', import: 'boom' } }] }, ignored.ctx)).toBeNull()
+    expect(
+      await transformPreeval(
+        code,
+        entry,
+        { onFailure: 'ignore', rules: [{ match: { from: './helper.js', import: 'boom' } }] },
+        ignored.ctx,
+      ),
+    ).toBeNull()
     expect(ignored.warns).toEqual([])
 
     const overridden = makeCtx()
-    expect(await transformPreeval(code, entry, { onFailure: 'ignore', rules: [{ match: { from: './helper.js', import: 'boom' }, onFailure: 'warn' }] }, overridden.ctx)).toBeNull()
+    expect(
+      await transformPreeval(
+        code,
+        entry,
+        {
+          onFailure: 'ignore',
+          rules: [{ match: { from: './helper.js', import: 'boom' }, onFailure: 'warn' }],
+        },
+        overridden.ctx,
+      ),
+    ).toBeNull()
     expect(overridden.warns).toHaveLength(1)
 
     const errored = makeCtx()
-    await expect(transformPreeval(code, entry, { onFailure: 'error', rules: [{ match: { from: './helper.js', import: 'boom' } }] }, errored.ctx)).rejects.toThrow(/boom/)
+    await expect(
+      transformPreeval(
+        code,
+        entry,
+        { onFailure: 'error', rules: [{ match: { from: './helper.js', import: 'boom' } }] },
+        errored.ctx,
+      ),
+    ).rejects.toThrow(/boom/)
     expect(errored.warns[0]).toMatch(/^ERR:/)
   })
 
@@ -838,7 +882,10 @@ export const values = [good(), boom(), bad()]
     const dir = tmpDir()
     writeFileSync(join(dir, 'runtime-api.js'), `export const boom = () => 'runtime fallback'\n`)
     writeFileSync(join(dir, 'pure.js'), `export const boom = () => { throw new Error('boom') }\n`)
-    writeFileSync(join(dir, 'materialize.js'), `throw new Error('materializer loaded during build')\nexport const revive = (value) => value\n`)
+    writeFileSync(
+      join(dir, 'materialize.js'),
+      `throw new Error('materializer loaded during build')\nexport const revive = (value) => value\n`,
+    )
     const entry = join(dir, 'entry.js')
     const code = `import { boom } from './runtime-api.js'
 export const failed = boom()
@@ -875,12 +922,9 @@ export const independent = 1 + 1
     expect(warned.warns).toHaveLength(1)
 
     const errored = makeCtx()
-    await expect(transformPreeval(
-      code,
-      entry,
-      { onFailure: 'error', rules: [rule] },
-      errored.ctx,
-    )).rejects.toThrow(/boom/)
+    await expect(
+      transformPreeval(code, entry, { onFailure: 'error', rules: [rule] }, errored.ctx),
+    ).rejects.toThrow(/boom/)
     expect(errored.warns[0]).toMatch(/^ERR:/)
   })
 
@@ -895,10 +939,17 @@ export const independent = 1 + 1
     writeFileSync(entry, code)
     const { ctx, warns } = makeCtx()
 
-    const res = await transformPreeval(code, entry, { rules: [
-      { match: { from: './helper.js', import: 'inner' } },
-      { match: { from: './helper.js', import: 'outer' } },
-    ] }, ctx)
+    const res = await transformPreeval(
+      code,
+      entry,
+      {
+        rules: [
+          { match: { from: './helper.js', import: 'inner' } },
+          { match: { from: './helper.js', import: 'outer' } },
+        ],
+      },
+      ctx,
+    )
 
     expect(res!.code).toContain('export const value = 12')
     expect(res!.code).not.toContain('helper.js')
@@ -934,23 +985,32 @@ export const direct = outer(inner([['a', 1]]))
     delete (globalThis as Record<string, unknown>).__preevalMaterializerLoaded
     const { ctx, warns } = makeCtx()
 
-    const res = await transformPreeval(code, entry, { rules: [
+    const res = await transformPreeval(
+      code,
+      entry,
       {
-        match: { from: './runtime-api.js', import: 'inner' },
-        evaluate: { from: './pure.js', import: 'evaluateInner' },
-        materialize: { from: './materialize.js', import: 'revive' },
+        rules: [
+          {
+            match: { from: './runtime-api.js', import: 'inner' },
+            evaluate: { from: './pure.js', import: 'evaluateInner' },
+            materialize: { from: './materialize.js', import: 'revive' },
+          },
+          {
+            match: { from: './runtime-api.js', import: 'outer' },
+            evaluate: { from: './pure.js', import: 'evaluateOuter' },
+          },
+        ],
       },
-      {
-        match: { from: './runtime-api.js', import: 'outer' },
-        evaluate: { from: './pure.js', import: 'evaluateOuter' },
-      },
-    ] }, ctx)
+      ctx,
+    )
 
     expect((globalThis as Record<string, unknown>).__preevalMaterializerLoaded).toBeUndefined()
     expect(res!.code.match(/from "\.\/materialize\.js"/g)).toHaveLength(1)
     expect(res!.code).toContain('const transitive = __preeval_materialize({"entries":[["b",2]]})')
     expect(res!.code).toContain('export const via = outer(transitive)')
-    expect(res!.code).toContain('export const direct = outer(__preeval_materialize({"entries":[["a",1]]}))')
+    expect(res!.code).toContain(
+      'export const direct = outer(__preeval_materialize({"entries":[["a",1]]}))',
+    )
     expect(res!.code).toContain('export const blocked = sizeOf(transitive)')
     expect(res!.code).toContain('export const unrelated = 42')
     expect(warns).toHaveLength(3)
@@ -991,29 +1051,40 @@ export const values = [d(1), n(2), n(3), s(4)]
     delete (globalThis as Record<string, unknown>).__preevalMaterializeCalls
     const { ctx, warns } = makeCtx()
 
-    const res = await transformPreeval(code, entry, { rules: [
+    const res = await transformPreeval(
+      code,
+      entry,
       {
-        match: { from: './runtime-api.js', import: 'd' },
-        evaluate: { from: './pure.js', import: 'd' },
-        materialize: { from: './materialize.js', import: 'default' },
+        rules: [
+          {
+            match: { from: './runtime-api.js', import: 'd' },
+            evaluate: { from: './pure.js', import: 'd' },
+            materialize: { from: './materialize.js', import: 'default' },
+          },
+          {
+            match: { from: './runtime-api.js', import: 'n' },
+            evaluate: { from: './pure.js', import: 'n' },
+            materialize: { from: './materialize.js', import: 'named' },
+          },
+          {
+            match: { from: './runtime-api.js', import: 's' },
+            evaluate: { from: './pure.js', import: 's' },
+            materialize: { from: './materialize.js', import: 'with-dash' },
+          },
+        ],
       },
-      {
-        match: { from: './runtime-api.js', import: 'n' },
-        evaluate: { from: './pure.js', import: 'n' },
-        materialize: { from: './materialize.js', import: 'named' },
-      },
-      {
-        match: { from: './runtime-api.js', import: 's' },
-        evaluate: { from: './pure.js', import: 's' },
-        materialize: { from: './materialize.js', import: 'with-dash' },
-      },
-    ] }, ctx)
+      ctx,
+    )
 
     expect((globalThis as Record<string, unknown>).__preevalMaterializeLoads).toBeUndefined()
     expect(res!.code).toMatch(/^#!\/usr\/bin\/env node\nimport/)
     expect(res!.code).toContain('import __preeval_materialize_1 from "./materialize.js";')
-    expect(res!.code).toContain('import { named as __preeval_materialize_2 } from "./materialize.js";')
-    expect(res!.code).toContain('import { "with-dash" as __preeval_materialize_3 } from "./materialize.js";')
+    expect(res!.code).toContain(
+      'import { named as __preeval_materialize_2 } from "./materialize.js";',
+    )
+    expect(res!.code).toContain(
+      'import { "with-dash" as __preeval_materialize_3 } from "./materialize.js";',
+    )
     expect(res!.code.match(/named as __preeval_materialize_2/g)).toHaveLength(1)
     expect(res!.code).not.toContain("from './runtime-api.js'")
     expect(warns).toEqual([])
@@ -1162,7 +1233,10 @@ export const values = [def\`a\${x}b\`, named\`c\${x}\`, alias\`d\${x}\`, ns.name
 
   it('uses alternate evaluators for tagged templates only at eval time', async () => {
     const dir = tmpDir()
-    writeFileSync(join(dir, 'runtime.js'), `throw new Error('runtime module initialized')\nexport const tag = () => 0\n`)
+    writeFileSync(
+      join(dir, 'runtime.js'),
+      `throw new Error('runtime module initialized')\nexport const tag = () => 0\n`,
+    )
     writeFileSync(
       join(dir, 'pure.js'),
       `export const tagPure = (strings, value) => ({ text: strings[0] + value + strings[1] })\n`,
@@ -1174,10 +1248,19 @@ export const output = tag\`ok-\${'x'}\`
     writeFileSync(entry, code)
     const { ctx, warns } = makeCtx()
 
-    const res = await transformPreeval(code, entry, { rules: [{
-      match: { from: './runtime.js', import: 'tag' },
-      evaluate: { from: './pure.js', import: 'tagPure' },
-    }] }, ctx)
+    const res = await transformPreeval(
+      code,
+      entry,
+      {
+        rules: [
+          {
+            match: { from: './runtime.js', import: 'tag' },
+            evaluate: { from: './pure.js', import: 'tagPure' },
+          },
+        ],
+      },
+      ctx,
+    )
 
     expect(res!.code).toContain('export const output = {"text":"ok-x"}')
     expect(res!.code).not.toContain('runtime.js')
@@ -1206,14 +1289,27 @@ export const output = tag\`key-\${2}\`
     writeFileSync(entry, code)
     const { ctx, warns } = makeCtx()
 
-    const res = await transformPreeval(code, entry, { rules: [{
-      match: { from: './runtime.js', import: 'tag' },
-      evaluate: { from: './pure.js', import: 'tag' },
-      materialize: { from: './materialize.js', import: 'revive' },
-    }] }, ctx)
+    const res = await transformPreeval(
+      code,
+      entry,
+      {
+        rules: [
+          {
+            match: { from: './runtime.js', import: 'tag' },
+            evaluate: { from: './pure.js', import: 'tag' },
+            materialize: { from: './materialize.js', import: 'revive' },
+          },
+        ],
+      },
+      ctx,
+    )
 
-    expect(res!.code).toContain('import { revive as __preeval_materialize } from "./materialize.js";')
-    expect(res!.code).toContain('export const output = __preeval_materialize({"entries":[["key-",2]]})')
+    expect(res!.code).toContain(
+      'import { revive as __preeval_materialize } from "./materialize.js";',
+    )
+    expect(res!.code).toContain(
+      'export const output = __preeval_materialize({"entries":[["key-",2]]})',
+    )
     expect(res!.code).not.toContain('runtime.js')
     expect(warns).toEqual([])
   })
@@ -1288,10 +1384,17 @@ export const value = outer(inner\`x\`)
     writeFileSync(entry, code)
     const { ctx, warns } = makeCtx()
 
-    const res = await transformPreeval(code, entry, { rules: [
-      { match: { from: './helper.js', import: 'inner' } },
-      { match: { from: './helper.js', import: 'outer' } },
-    ] }, ctx)
+    const res = await transformPreeval(
+      code,
+      entry,
+      {
+        rules: [
+          { match: { from: './helper.js', import: 'inner' } },
+          { match: { from: './helper.js', import: 'outer' } },
+        ],
+      },
+      ctx,
+    )
 
     expect(res!.code).toContain('export const value = "1x:2"')
     expect(res!.code).not.toContain('helper.js')

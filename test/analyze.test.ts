@@ -321,7 +321,6 @@ export { a, b }
     expect(() => analyzePreevalModule(code)).toThrow(/hoisted declaration|closure binding/)
   })
 
-
   it('indexes export default function dependencies', () => {
     const code = `export default function helper() { return 40 }
 // @preeval
@@ -376,13 +375,7 @@ ns['fn']()
       { match: { from: 'pkg', import: 'fn' } },
     ])
     expect(calls).toHaveLength(5)
-    expect(calls.map((call) => call.rule.match.import)).toEqual([
-      'default',
-      'fn',
-      'fn',
-      'fn',
-      'fn',
-    ])
+    expect(calls.map((call) => call.rule.match.import)).toEqual(['default', 'fn', 'fn', 'fn', 'fn'])
   })
 
   it('matches tagged templates with the same binding rules', () => {
@@ -400,13 +393,7 @@ ns['fn']\`e\`
       { match: { from: 'pkg', import: 'fn' } },
     ])
     expect(calls).toHaveLength(5)
-    expect(calls.map((call) => call.rule.match.import)).toEqual([
-      'default',
-      'fn',
-      'fn',
-      'fn',
-      'fn',
-    ])
+    expect(calls.map((call) => call.rule.match.import)).toEqual(['default', 'fn', 'fn', 'fn', 'fn'])
   })
 
   it('does not treat untagged template literals as automatic sites', () => {
@@ -431,6 +418,8 @@ import('pkg').then((mod) => mod.fn())
 
   it('matches source specifiers exactly and does not follow barrels', () => {
     const code = `import { fn } from './barrel.js'\nfn()\n`
-    expect(findAutomaticPreevalCalls(code, [{ match: { from: './impl.js', import: 'fn' } }])).toEqual([])
+    expect(
+      findAutomaticPreevalCalls(code, [{ match: { from: './impl.js', import: 'fn' } }]),
+    ).toEqual([])
   })
 })

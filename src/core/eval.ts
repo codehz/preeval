@@ -132,8 +132,9 @@ export async function evalExtractedModule(
 
 function isThenable(value: unknown): boolean {
   return (
-    (typeof value === 'object' && value !== null) || typeof value === 'function'
-  ) && typeof (value as { then?: unknown }).then === 'function'
+    ((typeof value === 'object' && value !== null) || typeof value === 'function') &&
+    typeof (value as { then?: unknown }).then === 'function'
+  )
 }
 
 export function readTargetValues(

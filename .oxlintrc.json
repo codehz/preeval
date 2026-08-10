@@ -1,0 +1,37 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "import", "node", "vitest"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
+  "ignorePatterns": ["dist/**", "node_modules/**", "coverage/**", "*.tgz"],
+  "env": {
+    "builtin": true
+  },
+  "rules": {
+    // Match tsconfig: unused locals/params intentionally allowed.
+    "no-unused-vars": "off",
+    "typescript/no-unused-vars": "off",
+    // Synthetic runtime bindings use `__preeval*`.
+    "no-underscore-dangle": "off",
+    // Local helpers next to the logic they support are fine.
+    "unicorn/consistent-function-scoping": "off",
+    // Filename style is not enforced in this package.
+    "unicorn/filename-case": "off",
+    // Empty-class fixtures appear in serialize tests.
+    "typescript/no-extraneous-class": "off"
+  },
+  "overrides": [
+    {
+      "files": ["test/**/*.{ts,tsx,js,jsx}"],
+      "env": {
+        "vitest": true
+      },
+      "rules": {
+        "vitest/expect-expect": "error",
+        "vitest/no-disabled-tests": "warn"
+      }
+    }
+  ]
+}

@@ -50,19 +50,21 @@ Use `rules` to define an explicit match → evaluate → optional materialize pi
 import preeval from '@codehz/preeval/vite'
 
 export default defineConfig({
-  plugins: [preeval({
-    rules: [
-      {
-        match: { from: 'message-compiler', import: 'compile' },
-      },
-      {
-        match: { from: 'runtime-package', import: 'compile' },
-        evaluate: { from: 'pure-package', import: 'compilePure' },
-        materialize: { from: 'runtime-package', import: 'materialize' },
-        onFailure: 'warn',
-      },
-    ],
-  })],
+  plugins: [
+    preeval({
+      rules: [
+        {
+          match: { from: 'message-compiler', import: 'compile' },
+        },
+        {
+          match: { from: 'runtime-package', import: 'compile' },
+          evaluate: { from: 'pure-package', import: 'compilePure' },
+          materialize: { from: 'runtime-package', import: 'materialize' },
+          onFailure: 'warn',
+        },
+      ],
+    }),
+  ],
 })
 ```
 
@@ -112,13 +114,13 @@ await Bun.build({
 
 ## Options
 
-| Option      | Default              | Description |
-| ----------- | -------------------- | ----------- |
-| `onFailure` | `'warn'`             | Global `ignore \| warn \| error` policy for marked bindings and automatic calls. |
-| `rules`     | `[]`                 | Explicit `match`, optional `evaluate`, optional `materialize`, and optional rule-level `onFailure`. |
-| `allowNode` | `false`              | Trust acknowledgment for Node/Bun APIs. Nothing is injected or stripped; there is no sandbox. |
-| `include`   | `/\.[cm]?[jt]sx?$/`  | File-id filter passed to the bundler. |
-| `exclude`   | `/node_modules/`     | File-id filter passed to the bundler. |
+| Option      | Default             | Description                                                                                         |
+| ----------- | ------------------- | --------------------------------------------------------------------------------------------------- |
+| `onFailure` | `'warn'`            | Global `ignore \| warn \| error` policy for marked bindings and automatic calls.                    |
+| `rules`     | `[]`                | Explicit `match`, optional `evaluate`, optional `materialize`, and optional rule-level `onFailure`. |
+| `allowNode` | `false`             | Trust acknowledgment for Node/Bun APIs. Nothing is injected or stripped; there is no sandbox.       |
+| `include`   | `/\.[cm]?[jt]sx?$/` | File-id filter passed to the bundler.                                                               |
+| `exclude`   | `/node_modules/`    | File-id filter passed to the bundler.                                                               |
 
 When `rules` is empty, the plugin retains the marker-only source filter. When any automatic rule exists, every file passing `include`/`exclude` is inspected because substring filtering could miss aliased or namespace calls.
 
@@ -162,7 +164,6 @@ Rejected evaluator payloads: `undefined`, `NaN`, `±Infinity`, `bigint`, functio
 - Static-analysis limits include dynamic code such as `eval(...)`/`new Function(...)`, and bundler-only virtual modules, path aliases, or package mappings that the adjacent temporary file cannot load. Failures follow `onFailure`.
 - `import.meta` in an extracted closure is refused because the temporary path would leak.
 - No declaration-file rewriting or first-class webpack support.
-
 
 ## How it works
 

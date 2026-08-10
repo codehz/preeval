@@ -2,18 +2,24 @@
   "name": "@codehz/preeval",
   "version": "0.3.0",
   "description": "Publish-build pre-evaluation of imported ESM calls with optional runtime materialization",
-  "type": "module",
-  "license": "MIT",
   "keywords": [
-    "unplugin",
-    "vite",
-    "rollup",
-    "bun",
     "build",
+    "bun",
     "const",
     "precompute",
-    "preeval"
+    "preeval",
+    "rollup",
+    "unplugin",
+    "vite"
   ],
+  "license": "MIT",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -33,27 +39,14 @@
     },
     "./package.json": "./package.json"
   },
-  "main": "./dist/index.js",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "files": [
-    "dist"
-  ],
   "scripts": {
     "build": "tsdown",
     "test": "vitest run",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
     "prepublishOnly": "bun run build"
-  },
-  "engines": {
-    "node": "^20.19.0 || >=22.12.0"
-  },
-  "peerDependencies": {
-    "sucrase": "^3"
-  },
-  "peerDependenciesMeta": {
-    "sucrase": {
-      "optional": true
-    }
   },
   "dependencies": {
     "@babel/generator": "^7",
@@ -67,8 +60,21 @@
     "@types/babel__generator": "^7.27.0",
     "@types/babel__traverse": "^7.28.0",
     "@types/bun": "latest",
+    "oxfmt": "^0.62.0",
+    "oxlint": "^1.77.0",
     "sucrase": "^3.35.1",
     "tsdown": "^0.22.14",
     "vitest": "^4.1.10"
+  },
+  "peerDependencies": {
+    "sucrase": "^3"
+  },
+  "peerDependenciesMeta": {
+    "sucrase": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
   }
 }

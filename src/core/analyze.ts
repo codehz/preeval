@@ -2,13 +2,7 @@ import { parse, type ParserPlugin } from '@babel/parser'
 import generateMod from '@babel/generator'
 import traverseMod, { type Binding, type NodePath, type Scope } from '@babel/traverse'
 import * as t from '@babel/types'
-import type {
-  Comment,
-  File,
-  ImportDeclaration,
-  Statement,
-  VariableDeclaration,
-} from '@babel/types'
+import type { Comment, File, ImportDeclaration, Statement, VariableDeclaration } from '@babel/types'
 import type { PreevalRule } from '../types'
 
 // CJS interop: Bun/Node may surface either the function or `{ default: fn }`.
@@ -95,12 +89,12 @@ function pluginsForFilename(filename?: string): ParserPlugin[] {
     return ['typescript', 'jsx']
   }
   if (
-    lower.endsWith('.ts')
-    || lower.endsWith('.mts')
-    || lower.endsWith('.cts')
-    || lower.endsWith('.js')
-    || lower.endsWith('.mjs')
-    || lower.endsWith('.cjs')
+    lower.endsWith('.ts') ||
+    lower.endsWith('.mts') ||
+    lower.endsWith('.cts') ||
+    lower.endsWith('.js') ||
+    lower.endsWith('.mjs') ||
+    lower.endsWith('.cjs')
   ) {
     return ['typescript']
   }
@@ -146,9 +140,9 @@ function isMarked(code: string, file: File, stmt: Statement): boolean {
   for (const comment of comments) {
     const end = comment.end
     if (
-      typeof end === 'number'
-      && end <= start
-      && (closest === null || end > assertNumber(closest.end, 'comment end'))
+      typeof end === 'number' &&
+      end <= start &&
+      (closest === null || end > assertNumber(closest.end, 'comment end'))
     ) {
       closest = comment
     }
@@ -163,9 +157,9 @@ function isMarked(code: string, file: File, stmt: Statement): boolean {
 /** Unwrap `export …` to the inner declaration statement when present. */
 function unwrapExport(stmt: Statement): Statement {
   if (
-    (stmt.type === 'ExportNamedDeclaration' || stmt.type === 'ExportDefaultDeclaration')
-    && stmt.declaration != null
-    && stmt.declaration.type !== 'StringLiteral'
+    (stmt.type === 'ExportNamedDeclaration' || stmt.type === 'ExportDefaultDeclaration') &&
+    stmt.declaration != null &&
+    stmt.declaration.type !== 'StringLiteral'
   ) {
     return stmt.declaration as Statement
   }
@@ -201,10 +195,7 @@ function collectMarkedTargets(code: string, file: File): RawMarkedTarget[] {
   return targets
 }
 
-export function findMarkedPreevalTargets(
-  code: string,
-  filename?: string,
-): MarkedBindingTarget[] {
+export function findMarkedPreevalTargets(code: string, filename?: string): MarkedBindingTarget[] {
   const file = parseModule(code, filename)
   if (file == null) return []
   return collectMarkedTargets(code, file).map(({ name, initStart, initEnd }) => ({
@@ -310,7 +301,9 @@ function collectProgramFreeNames(
   return names
 }
 
-function importLocalName(spec: t.ImportSpecifier | t.ImportDefaultSpecifier | t.ImportNamespaceSpecifier): string {
+function importLocalName(
+  spec: t.ImportSpecifier | t.ImportDefaultSpecifier | t.ImportNamespaceSpecifier,
+): string {
   return spec.local.name
 }
 
@@ -327,9 +320,7 @@ interface MatchedImportedCall {
   localName: string
 }
 
-function importedExportName(
-  spec: t.ImportSpecifier | t.ImportDefaultSpecifier,
-): string {
+function importedExportName(spec: t.ImportSpecifier | t.ImportDefaultSpecifier): string {
   if (spec.type === 'ImportDefaultSpecifier') return 'default'
   return spec.imported.type === 'Identifier' ? spec.imported.name : spec.imported.value
 }
@@ -369,9 +360,9 @@ function matchImportedCallee(
   if (binding == null) return null
   const spec = binding.path.node
   if (
-    spec.type !== 'ImportSpecifier'
-    && spec.type !== 'ImportDefaultSpecifier'
-    && spec.type !== 'ImportNamespaceSpecifier'
+    spec.type !== 'ImportSpecifier' &&
+    spec.type !== 'ImportDefaultSpecifier' &&
+    spec.type !== 'ImportNamespaceSpecifier'
   ) {
     return null
   }
@@ -386,7 +377,8 @@ function matchImportedCallee(
   }
 
   const rule = rules.find(
-    (candidate) => candidate.match.from === decl.source.value && candidate.match.import === exportName,
+    (candidate) =>
+      candidate.match.from === decl.source.value && candidate.match.import === exportName,
   )
   return rule ? { rule, localName } : null
 }
@@ -474,8 +466,8 @@ function indexLocalDecls(programPath: NodePath<t.Program>): Map<string, LocalDec
 
     // Named and default exports can wrap a local declaration with a stable id.
     const innerPath =
-      (stmtPath.isExportNamedDeclaration() || stmtPath.isExportDefaultDeclaration())
-      && stmtPath.node.declaration
+      (stmtPath.isExportNamedDeclaration() || stmtPath.isExportDefaultDeclaration()) &&
+      stmtPath.node.declaration
         ? (stmtPath.get('declaration') as NodePath)
         : stmtPath
     const inner = innerPath.node
@@ -632,7 +624,6 @@ function assertNoImportMeta(root: NodePath): void {
     },
   })
 }
-
 
 /**
  * Names of sibling declarators in the same VariableDeclaration as `name`
@@ -791,10 +782,7 @@ function assertNoInterferingStatements(
   const closureHasImports = [...closure].some((n) => localDecls.get(n)?.kind === 'import')
 
   // Non-closure hoistables: body effects matter only if a call site reaches them.
-  const hoistables = new Map<
-    string,
-    { path: NodePath; free: Set<string>; written: Set<string> }
-  >()
+  const hoistables = new Map<string, { path: NodePath; free: Set<string>; written: Set<string> }>()
   for (const stmtPath of programPath.get('body')) {
     const name = hoistableName(stmtPath.node)
     if (name == null || closure.has(name)) continue
@@ -865,10 +853,10 @@ function assertNoInterferingStatements(
     // the extract. If the closure still pulls value imports, those modules may
     // have been mutated by the skipped side-effect import — refuse.
     if (
-      beforeAnyTarget
-      && stmt.type === 'ImportDeclaration'
-      && stmt.importKind !== 'type'
-      && closureHasImports
+      beforeAnyTarget &&
+      stmt.type === 'ImportDeclaration' &&
+      stmt.importKind !== 'type' &&
+      closureHasImports
     ) {
       const runtimeSpecs = stmt.specifiers.filter((s) => !isTypeOnlyImportSpec(stmt, s))
       if (runtimeSpecs.length === 0) {
@@ -905,7 +893,6 @@ function assertNoInterferingStatements(
     }
   }
 }
-
 
 function writtenProgramNames(
   node: t.LVal | t.Expression | t.OptionalMemberExpression,
@@ -977,10 +964,7 @@ function isBindingOwnedByPayload(binding: Binding, payloadPath: NodePath): boole
   return false
 }
 
-function assertAutomaticPayloadDependencies(
-  payloadPath: NodePath,
-  programScope: Scope,
-): void {
+function assertAutomaticPayloadDependencies(payloadPath: NodePath, programScope: Scope): void {
   const rejectLocal = (path: NodePath<t.Identifier>): void => {
     if (!path.isReferencedIdentifier()) return
     if (path.node.name === 'arguments') {
@@ -988,9 +972,9 @@ function assertAutomaticPayloadDependencies(
     }
     const binding = path.scope.getBinding(path.node.name)
     if (
-      binding != null
-      && binding.scope !== programScope
-      && !isBindingOwnedByPayload(binding, payloadPath)
+      binding != null &&
+      binding.scope !== programScope &&
+      !isBindingOwnedByPayload(binding, payloadPath)
     ) {
       throw new Error(
         `preeval: automatic call depends on function-local binding "${path.node.name}"`,
@@ -1132,10 +1116,7 @@ function buildExtractedCode(
     t.exportNamedDeclaration(
       null,
       targets.map((target) =>
-        t.exportSpecifier(
-          t.identifier(target.name),
-          t.identifier(target.evalExportName),
-        ),
+        t.exportSpecifier(t.identifier(target.name), t.identifier(target.evalExportName)),
       ),
     ),
   )
@@ -1182,14 +1163,15 @@ function buildAutomaticExtractedCode(
 
   if (!sameFunctionRef(evaluator, rule.match)) {
     const evaluatorName = allocateSyntheticName('__preeval_evaluate', used)
-    const specifier = evaluator.import === 'default'
-      ? t.importDefaultSpecifier(t.identifier(evaluatorName))
-      : t.importSpecifier(
-          t.identifier(evaluatorName),
-          t.isValidIdentifier(evaluator.import)
-            ? t.identifier(evaluator.import)
-            : t.stringLiteral(evaluator.import),
-        )
+    const specifier =
+      evaluator.import === 'default'
+        ? t.importDefaultSpecifier(t.identifier(evaluatorName))
+        : t.importSpecifier(
+            t.identifier(evaluatorName),
+            t.isValidIdentifier(evaluator.import)
+              ? t.identifier(evaluator.import)
+              : t.stringLiteral(evaluator.import),
+          )
     out.push(t.importDeclaration([specifier], t.stringLiteral(evaluator.from)))
     if (expression.type === 'CallExpression') expression.callee = t.identifier(evaluatorName)
     else expression.tag = t.identifier(evaluatorName)
@@ -1200,13 +1182,10 @@ function buildAutomaticExtractedCode(
     if (extracted) out.push(extracted)
   }
   out.push(
-    t.variableDeclaration('const', [
-      t.variableDeclarator(t.identifier(resultName), expression),
+    t.variableDeclaration('const', [t.variableDeclarator(t.identifier(resultName), expression)]),
+    t.exportNamedDeclaration(null, [
+      t.exportSpecifier(t.identifier(resultName), t.identifier(evalExportName)),
     ]),
-    t.exportNamedDeclaration(
-      null,
-      [t.exportSpecifier(t.identifier(resultName), t.identifier(evalExportName))],
-    ),
   )
 
   const generated = generate(t.file(t.program(out, [], 'module')), {
@@ -1277,8 +1256,8 @@ export function analyzeAutomaticPreevalCall(
 
   const closure = buildNameClosure(roots, programScope, localDecls)
   if (
-    options?.runtimeBoundaries?.length
-    && closureTouchesRanges(
+    options?.runtimeBoundaries?.length &&
+    closureTouchesRanges(
       automaticExpressionPayloadPaths(expressionPath),
       closure,
       localDecls,
@@ -1307,12 +1286,14 @@ export function analyzeAutomaticPreevalCall(
   )
   return {
     code: built.code,
-    targets: [{
-      name: built.name,
-      initStart: assertNumber(expressionPath.node.start, 'call start'),
-      initEnd: assertNumber(expressionPath.node.end, 'call end'),
-      evalExportName: built.evalExportName,
-    }],
+    targets: [
+      {
+        name: built.name,
+        initStart: assertNumber(expressionPath.node.start, 'call start'),
+        initEnd: assertNumber(expressionPath.node.end, 'call end'),
+        evalExportName: built.evalExportName,
+      },
+    ],
   }
 }
 
@@ -1363,8 +1344,8 @@ export function analyzePreevalModule(
     const targetClosure = buildNameClosure([target.name], programScope, localDecls)
     perTargetClosures.set(target.name, targetClosure)
     if (
-      options?.runtimeBoundaries?.length
-      && closureTouchesRanges([], targetClosure, localDecls, options.runtimeBoundaries)
+      options?.runtimeBoundaries?.length &&
+      closureTouchesRanges([], targetClosure, localDecls, options.runtimeBoundaries)
     ) {
       blockedTargets.push({
         name: target.name,
@@ -1385,13 +1366,7 @@ export function analyzePreevalModule(
     for (const name of perTargetClosures.get(target.name) ?? []) closure.add(name)
   }
 
-  assertNoInterferingStatements(
-    pPath,
-    rawTargets,
-    closure,
-    localDecls,
-    perTargetClosures,
-  )
+  assertNoInterferingStatements(pPath, rawTargets, closure, localDecls, perTargetClosures)
 
   const evalNames = allocateEvalExportNames(
     rawTargets.map((target) => target.name),
@@ -1463,11 +1438,11 @@ export function planAutomaticImportCleanup(
       }
 
       const binding = programPath.scope.getBinding(localName)
-      const hasRuntimeReference = binding?.referencePaths.some(
-        (reference) =>
-          !isTypeOnlyReference(reference)
-          && !isInsideAnyRange(reference, replacementRanges),
-      ) ?? false
+      const hasRuntimeReference =
+        binding?.referencePaths.some(
+          (reference) =>
+            !isTypeOnlyReference(reference) && !isInsideAnyRange(reference, replacementRanges),
+        ) ?? false
       if (hasRuntimeReference) {
         kept.push(spec)
       } else {

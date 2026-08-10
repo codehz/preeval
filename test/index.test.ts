@@ -21,40 +21,57 @@ describe('unpluginFactory', () => {
   })
 
   it('inspects unmarked files when automatic rules are configured', () => {
-    expect(plugin({ rules: [{ match: { from: 'pkg', import: 'fn' } }] }).transform.filter.code).toBeUndefined()
+    expect(
+      plugin({ rules: [{ match: { from: 'pkg', import: 'fn' } }] }).transform.filter.code,
+    ).toBeUndefined()
   })
 
   it('rejects malformed policies and duplicate rules immediately', () => {
     expect(() => plugin({ onFailure: 'invalid' as never })).toThrow(/onFailure/)
-    expect(() => plugin(
-      { strict: true } as unknown as Parameters<typeof unpluginFactory>[0],
-    )).toThrow(/strict was removed/)
-    expect(() => plugin({ rules: [
-      { match: { from: 'pkg', import: 'fn' } },
-      { match: { from: 'pkg', import: 'fn' } },
-    ] })).toThrow(/duplicate/)
-    expect(() => plugin({ rules: [{ match: { from: '', import: 'fn' } }] })).toThrow(/non-empty string/)
-    expect(() => plugin(
-      { imports: [] } as unknown as Parameters<typeof unpluginFactory>[0],
-    )).toThrow(/imports was removed/)
+    expect(() =>
+      plugin({ strict: true } as unknown as Parameters<typeof unpluginFactory>[0]),
+    ).toThrow(/strict was removed/)
+    expect(() =>
+      plugin({
+        rules: [{ match: { from: 'pkg', import: 'fn' } }, { match: { from: 'pkg', import: 'fn' } }],
+      }),
+    ).toThrow(/duplicate/)
+    expect(() => plugin({ rules: [{ match: { from: '', import: 'fn' } }] })).toThrow(
+      /non-empty string/,
+    )
+    expect(() =>
+      plugin({ imports: [] } as unknown as Parameters<typeof unpluginFactory>[0]),
+    ).toThrow(/imports was removed/)
     expect(() => plugin({ rules: [{ match: null as never }] })).toThrow(/match/)
-    expect(() => plugin({
-      rules: [{
-        match: { from: 'pkg', import: 'fn' },
-        evaluate: { from: '', import: 'fn' },
-      }],
-    })).toThrow(/evaluate/)
-    expect(() => plugin({
-      rules: [{
-        match: { from: 'pkg', import: 'fn' },
-        materialize: { from: 'runtime', import: '' },
-      }],
-    })).toThrow(/materialize/)
-    expect(() => plugin({
-      rules: [{
-        match: { from: 'pkg', import: 'fn' },
-        substitute: { from: 'pure', import: 'fn' },
-      }],
-    } as unknown as Parameters<typeof unpluginFactory>[0])).toThrow(/substitute was removed/)
+    expect(() =>
+      plugin({
+        rules: [
+          {
+            match: { from: 'pkg', import: 'fn' },
+            evaluate: { from: '', import: 'fn' },
+          },
+        ],
+      }),
+    ).toThrow(/evaluate/)
+    expect(() =>
+      plugin({
+        rules: [
+          {
+            match: { from: 'pkg', import: 'fn' },
+            materialize: { from: 'runtime', import: '' },
+          },
+        ],
+      }),
+    ).toThrow(/materialize/)
+    expect(() =>
+      plugin({
+        rules: [
+          {
+            match: { from: 'pkg', import: 'fn' },
+            substitute: { from: 'pure', import: 'fn' },
+          },
+        ],
+      } as unknown as Parameters<typeof unpluginFactory>[0]),
+    ).toThrow(/substitute was removed/)
   })
 })

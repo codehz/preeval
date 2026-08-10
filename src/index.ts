@@ -1,17 +1,8 @@
-import {
-  createUnplugin,
-  type TransformResult,
-  type UnpluginFactory,
-} from 'unplugin'
+import { createUnplugin, type TransformResult, type UnpluginFactory } from 'unplugin'
 import type { FailurePolicy, ImportedFunctionRef, Options } from './types'
 import { transformPreeval } from './core/transform'
 
-export type {
-  FailurePolicy,
-  ImportedFunctionRef,
-  Options,
-  PreevalRule,
-} from './types'
+export type { FailurePolicy, ImportedFunctionRef, Options, PreevalRule } from './types'
 
 /**
  * Structural stand-in for rollup's SourceMapInput. `transformPreeval` produces
@@ -36,9 +27,7 @@ const FAILURE_POLICIES = new Set<FailurePolicy>(['ignore', 'warn', 'error'])
 
 function assertFailurePolicy(value: unknown, field: string): asserts value is FailurePolicy {
   if (typeof value !== 'string' || !FAILURE_POLICIES.has(value as FailurePolicy)) {
-    throw new TypeError(
-      `[preeval] ${field} must be one of "ignore", "warn", or "error"`,
-    )
+    throw new TypeError(`[preeval] ${field} must be one of "ignore", "warn", or "error"`)
   }
 }
 
@@ -60,9 +49,7 @@ function assertFunctionRef(value: unknown, field: string): asserts value is Impo
 function validateOptions(options: Options): void {
   const rawOptions = options as unknown as Record<string, unknown>
   if ('strict' in rawOptions) {
-    throw new TypeError(
-      '[preeval] strict was removed; use onFailure: "error" instead',
-    )
+    throw new TypeError('[preeval] strict was removed; use onFailure: "error" instead')
   }
   if ('imports' in rawOptions) {
     throw new TypeError('[preeval] imports was removed; use rules instead')

@@ -63,9 +63,11 @@ function effectiveReplacements<T extends { start: number; end: number }>(
 ): T[] {
   const selected: T[] = []
   for (const replacement of [...replacements].sort(
-    (a, b) => (b.end - b.start) - (a.end - a.start) || a.start - b.start,
+    (a, b) => b.end - b.start - (a.end - a.start) || a.start - b.start,
   )) {
-    if (selected.some((outer) => outer.start <= replacement.start && replacement.end <= outer.end)) {
+    if (
+      selected.some((outer) => outer.start <= replacement.start && replacement.end <= outer.end)
+    ) {
       continue
     }
     selected.push(replacement)
@@ -93,10 +95,7 @@ function renderAutomaticStatic(
   return { code: output, runtimeBoundaries }
 }
 
-function mapAutomaticOffset(
-  offset: number,
-  replacements: readonly AutomaticReplacement[],
-): number {
+function mapAutomaticOffset(offset: number, replacements: readonly AutomaticReplacement[]): number {
   let mapped = offset
   for (const replacement of effectiveReplacements(replacements)) {
     if (replacement.end > offset) break
@@ -141,9 +140,7 @@ function runtimeImportInsertionOffset(code: string): number {
   const newline = code.indexOf('\n')
   return newline === -1 ? code.length : newline + 1
 }
-function automaticEvaluationOrder(
-  targets: readonly AutomaticCallTarget[],
-): AutomaticCallTarget[] {
+function automaticEvaluationOrder(targets: readonly AutomaticCallTarget[]): AutomaticCallTarget[] {
   const children = new Map<AutomaticCallTarget, AutomaticCallTarget[]>()
   const roots: AutomaticCallTarget[] = []
   for (const target of targets) children.set(target, [])
@@ -216,13 +213,9 @@ export async function transformPreeval(
     const label = `${target.rule.match.from}#${target.rule.match.import}`
     let plan: EvaluationPlan
     try {
-      plan = analyzeAutomaticPreevalCall(
-        intermediate.code,
-        currentStart,
-        target.rule,
-        file,
-        { runtimeBoundaries: intermediate.runtimeBoundaries },
-      )
+      plan = analyzeAutomaticPreevalCall(intermediate.code, currentStart, target.rule, file, {
+        runtimeBoundaries: intermediate.runtimeBoundaries,
+      })
     } catch (cause) {
       const msg = `[preeval] ${file}:${target.line}:${target.column + 1} ${label} failed: ${reasonOf(cause)}`
       reportFailure(policy, msg, ctx, cause)
@@ -343,12 +336,7 @@ export async function transformPreeval(
   ])
   if (replacements.length === 0) return null
 
-  const cleanup = planAutomaticImportCleanup(
-    code,
-    successfulBindings,
-    replacements,
-    file,
-  )
+  const cleanup = planAutomaticImportCleanup(code, successfulBindings, replacements, file)
   const usedMaterializers = new Map<string, ImportedFunctionRef>()
   for (const replacement of replacements) {
     if (replacement.materializer) {
@@ -365,9 +353,10 @@ export async function transformPreeval(
   }
 
   if (usedMaterializers.size > 0) {
-    const importBlock = [...usedMaterializers.entries()]
-      .map(([key, ref]) => renderMaterializerImport(ref, materializerLocals.get(key)!))
-      .join('\n') + '\n'
+    const importBlock =
+      [...usedMaterializers.entries()]
+        .map(([key, ref]) => renderMaterializerImport(ref, materializerLocals.get(key)!))
+        .join('\n') + '\n'
     const offset = runtimeImportInsertionOffset(code)
     if (offset === 0) s.prepend(importBlock)
     else s.appendLeft(offset, importBlock)

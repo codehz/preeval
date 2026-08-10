@@ -22,19 +22,20 @@ bundler (vite|rollup|bun)
         4. apply non-overlapping replacements + dead import cleanup
 ```
 
-| Layer | Path | Role |
-| --- | --- | --- |
-| Public factory | `src/index.ts` | `unpluginFactory`, `preeval`, default export |
-| Adapters | `src/vite.ts`, `src/rollup.ts`, `src/bun.ts` | `create*Plugin(unpluginFactory)` one-liners |
-| Options | `src/types.ts` | `Options`: `onFailure`, `imports`, `allowNode`, `include`, `exclude` |
-| Analyze | `src/core/analyze.ts` | call/tag matching, dependency closures, evaluation plans, import cleanup plans |
-| Eval | `src/core/eval.ts` | `evalExtractedModule` → `Map<localName, value>` |
-| Serialize | `src/core/serialize.ts` | `isJsonValue` / `serializeJson` |
-| Orchestrate | `src/core/transform.ts` | `transformPreeval` + `TransformContext { warn, error }` |
+| Layer          | Path                                         | Role                                                                           |
+| -------------- | -------------------------------------------- | ------------------------------------------------------------------------------ |
+| Public factory | `src/index.ts`                               | `unpluginFactory`, `preeval`, default export                                   |
+| Adapters       | `src/vite.ts`, `src/rollup.ts`, `src/bun.ts` | `create*Plugin(unpluginFactory)` one-liners                                    |
+| Options        | `src/types.ts`                               | `Options`: `onFailure`, `imports`, `allowNode`, `include`, `exclude`           |
+| Analyze        | `src/core/analyze.ts`                        | call/tag matching, dependency closures, evaluation plans, import cleanup plans |
+| Eval           | `src/core/eval.ts`                           | `evalExtractedModule` → `Map<localName, value>`                                |
+| Serialize      | `src/core/serialize.ts`                      | `isJsonValue` / `serializeJson`                                                |
+| Orchestrate    | `src/core/transform.ts`                      | `transformPreeval` + `TransformContext { warn, error }`                        |
 
 **Failure policy**: global `onFailure` defaults to `warn`; `ignore` preserves silently, `warn` preserves with diagnostics, and `error` aborts through `ctx.error`. Automatic rules may override the policy. Configuration errors always throw. `strict` was removed.
 
 **Eval notes**:
+
 - Temp file: `.preeval-<pid>-<time36>-<hex><ext>` written **next to** the source so relative imports resolve; always deleted in `finally`.
 - Bun: native TS/TSX; Node: optional peer `sucrase` transpiles **extracted entry only** → `.mjs`.
 - `allowNode` is trust-only (currently a no-op via `void options.allowNode`); no sandbox.
@@ -52,7 +53,7 @@ test/          # vitest; imports ../src/core/* directly (no dist)
 dist/          # tsdown output (gitignored)
 ```
 
-No `docs/`, `scripts/`, CI, or lint/format configs.
+No `docs/`, `scripts/`, or CI configs.
 
 ## Development Commands
 
@@ -62,10 +63,14 @@ Prefer **Bun** as package manager and script runner.
 bun install
 bun run build          # tsdown → dist/*.js + *.d.ts
 bun run test           # vitest run
+bun run fmt            # oxfmt write
+bun run fmt:check      # oxfmt --check
+bun run lint           # oxlint
+bun run lint:fix      # oxlint --fix
 bun run prepublishOnly # build (hooks before publish)
 ```
 
-There is no lint/format/coverage script. Typecheck is implicit via editor/tsdown (`tsc` is `noEmit`).
+Typecheck is implicit via editor/tsdown (`tsc` is `noEmit`). Format/lint: **oxfmt** + **oxlint** (`.oxfmtrc.json`, `.oxlintrc.json`).
 
 ## Code Conventions & Common Patterns
 
@@ -88,30 +93,34 @@ There is no lint/format/coverage script. Typecheck is implicit via editor/tsdown
 
 ## Important Files
 
-| File | Why it matters |
-| --- | --- |
-| `src/index.ts` | Public unplugin factory, filters, transform hook |
-| `src/core/transform.ts` | Full pipeline + failure policy |
-| `src/core/analyze.ts` | Marker/call detection, closure plans, substitute extraction, import cleanup |
-| `src/core/eval.ts` | Bun vs Node prep, sucrase peer, temp-file lifecycle |
-| `src/core/serialize.ts` | JSON-superset whitelist |
-| `src/types.ts` | Public `Options` |
-| `package.json` | exports map (`.`, `./vite`, `./rollup`, `./bun`) |
-| `tsdown.config.ts` | 4 entries; `fixedExtension: false` → `.js`/`.d.ts` |
-| `README.md` | User-facing rules, options, value domain |
+| File                    | Why it matters                                                              |
+| ----------------------- | --------------------------------------------------------------------------- |
+| `src/index.ts`          | Public unplugin factory, filters, transform hook                            |
+| `src/core/transform.ts` | Full pipeline + failure policy                                              |
+| `src/core/analyze.ts`   | Marker/call detection, closure plans, substitute extraction, import cleanup |
+| `src/core/eval.ts`      | Bun vs Node prep, sucrase peer, temp-file lifecycle                         |
+| `src/core/serialize.ts` | JSON-superset whitelist                                                     |
+| `src/types.ts`          | Public `Options`                                                            |
+| `package.json`          | exports map (`.`, `./vite`, `./rollup`, `./bun`)                            |
+| `tsdown.config.ts`      | 4 entries; `fixedExtension: false` → `.js`/`.d.ts`                          |
+| `.oxfmtrc.json`         | oxfmt: single quotes, no semis, width 100                                   |
+| `.oxlintrc.json`        | oxlint: correctness/suspicious + TS/import/node/vitest                      |
+| `README.md`             | User-facing rules, options, value domain                                    |
 
 ## Runtime/Tooling Preferences
 
-| Concern | Choice |
-| --- | --- |
-| Package manager / lockfile | **Bun** (`bun.lock`) |
-| Dev runtime types | `@types/bun` |
-| Publish engines | Node `^20.19.0 \|\| >=22.12.0` |
-| Build | **tsdown** (rolldown-based); ESM only, no CJS |
-| DTS | `resolver: 'tsc'`, `deps.dts.neverBundle: true`, `skipLibCheck` |
-| Plugin framework | **unplugin** v3 |
-| Parsing / rewrite | `@babel/parser` + `@babel/traverse` + `@babel/generator` + `@babel/types`, `magic-string` |
-| Optional peer | `sucrase` ^3 (Node TS eval only) |
+| Concern                    | Choice                                                                                    |
+| -------------------------- | ----------------------------------------------------------------------------------------- |
+| Package manager / lockfile | **Bun** (`bun.lock`)                                                                      |
+| Dev runtime types          | `@types/bun`                                                                              |
+| Publish engines            | Node `^20.19.0 \|\| >=22.12.0`                                                            |
+| Build                      | **tsdown** (rolldown-based); ESM only, no CJS                                             |
+| Format                     | **oxfmt** (`bun run fmt` / `fmt:check`)                                                   |
+| Lint                       | **oxlint** (`bun run lint` / `lint:fix`)                                                  |
+| DTS                        | `resolver: 'tsc'`, `deps.dts.neverBundle: true`, `skipLibCheck`                           |
+| Plugin framework           | **unplugin** v3                                                                           |
+| Parsing / rewrite          | `@babel/parser` + `@babel/traverse` + `@babel/generator` + `@babel/types`, `magic-string` |
+| Optional peer              | `sucrase` ^3 (Node TS eval only)                                                          |
 
 Do not introduce CJS dual-package, webpack adapters, or sandboxed eval without an intentional design change.
 
