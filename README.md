@@ -80,7 +80,7 @@ If a later automatic target or marked binding depends directly or transitively o
 
 ## Usage
 
-The plugin only runs during your publish build (Vite library mode, Rollup, or Bun.build). It is a no-op for consumer builds, and consumers never need it.
+The plugin only runs during your publish build (Vite library mode, Rollup, Rolldown, esbuild, or Bun.build). It is a no-op for consumer builds, and consumers never need it.
 
 ### Vite
 
@@ -101,6 +101,32 @@ export default {
   plugins: [preeval()],
 }
 ```
+
+### Rolldown
+
+```ts
+import preeval from '@codehz/preeval/rolldown'
+
+export default {
+  plugins: [preeval()],
+}
+```
+
+### esbuild
+
+```ts
+import { build } from 'esbuild'
+import preeval from '@codehz/preeval/esbuild'
+
+await build({
+  entryPoints: ['src/index.ts'],
+  bundle: true,
+  outfile: 'dist/index.js',
+  plugins: [preeval()],
+})
+```
+
+esbuild does not honor `enforce`. Keep this plugin ahead of other plugins that rewrite the same modules. For tsup, use `@codehz/preeval/esbuild` (default) or `@codehz/preeval/rollup` when tsup is configured for the Rollup path.
 
 ### Bun.build
 
@@ -147,7 +173,7 @@ Rejected evaluator payloads: `undefined`, `NaN`, `±Infinity`, `bigint`, functio
 
 ## Requirements / caveats
 
-- Use it on the author-side publish build (tsup, Vite, Rollup, Bun.build) — not in consumer apps.
+- Use it on the author-side publish build (tsup, Vite, Rollup, Rolldown, esbuild, Bun.build) — not in consumer apps.
 - Evaluation extracts the same-file lexical dependency closure: imports and stable module-level `const`, function, class, and enum declarations. Unrelated top-level statements and side-effect-only imports are not executed.
 - Calls, constructors, getters, imported-module initialization, and other side effects inside the extracted closure are allowed. Configuring a rule is an explicit trust decision; there is no purity analysis or sandbox.
 - Only synchronous results are supported. Promise/thenable results are failures and are never implicitly awaited.

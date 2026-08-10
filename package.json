@@ -6,8 +6,10 @@
     "build",
     "bun",
     "const",
+    "esbuild",
     "precompute",
     "preeval",
+    "rolldown",
     "rollup",
     "unplugin",
     "vite"
@@ -32,6 +34,14 @@
     "./rollup": {
       "types": "./dist/rollup.d.ts",
       "import": "./dist/rollup.js"
+    },
+    "./rolldown": {
+      "types": "./dist/rolldown.d.ts",
+      "import": "./dist/rolldown.js"
+    },
+    "./esbuild": {
+      "types": "./dist/esbuild.d.ts",
+      "import": "./dist/esbuild.js"
     },
     "./bun": {
       "types": "./dist/bun.d.ts",
@@ -60,8 +70,10 @@
     "@types/babel__generator": "^7.27.0",
     "@types/babel__traverse": "^7.28.0",
     "@types/bun": "latest",
+    "esbuild": "^0.25.0",
     "oxfmt": "^0.62.0",
     "oxlint": "^1.77.0",
+    "rolldown": "^1.2.3",
     "sucrase": "^3.35.1",
     "tsdown": "^0.22.14",
     "vitest": "^4.1.10"

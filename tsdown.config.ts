@@ -1,7 +1,14 @@
 import { defineConfig } from 'tsdown'
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/vite.ts', 'src/rollup.ts', 'src/bun.ts'],
+  entry: [
+    'src/index.ts',
+    'src/vite.ts',
+    'src/rollup.ts',
+    'src/rolldown.ts',
+    'src/esbuild.ts',
+    'src/bun.ts',
+  ],
   dts: {
     // vite 8.2.1 ships types importing a non-exported helper from
     // "#types/importGlob"; tsc + skipLibCheck (already in tsconfig) tolerates
